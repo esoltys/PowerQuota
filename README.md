@@ -106,6 +106,13 @@ PowerQuota/
 
 ---
 
+## Acknowledgments
+
+This project is a native Windows & PowerToys port inspired by and based on the work of [TopiCsarno/yapcap](https://github.com/TopiCsarno/yapcap) (originally created for the COSMIC desktop environment). Special thanks to [TopiCsarno](https://github.com/TopiCsarno) for their research into AI provider quota endpoints and rate-limit models.
+
+---
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
