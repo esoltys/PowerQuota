@@ -56,12 +56,21 @@ public class ProviderDetailsPage : ListPage
                     string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
 
                     string resetFormatted = window.FormatResetText(config.ShowRelativeResetTimes);
-                    var subtitleParts = new List<string>();
-
-                    if (!string.IsNullOrEmpty(resetFormatted))
+                    string resetPhrase;
+                    if (string.IsNullOrEmpty(resetFormatted))
                     {
-                        subtitleParts.Add(resetFormatted);
+                        resetPhrase = window.Label;
                     }
+                    else if (resetFormatted.StartsWith("Resets ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        resetPhrase = $"{window.Label} resets {resetFormatted.Substring(7)}";
+                    }
+                    else
+                    {
+                        resetPhrase = $"{window.Label} {resetFormatted.ToLowerInvariant()}";
+                    }
+
+                    var subtitleParts = new List<string> { resetPhrase };
 
                     if (!string.IsNullOrEmpty(window.ResetDescription))
                     {
@@ -77,8 +86,8 @@ public class ProviderDetailsPage : ListPage
 
                     string itemTitle = config.DockDisplayMode switch
                     {
-                        DockDisplayMode.BarsOnly => $"{window.Label}: {GetProgressBar(percent)} {pctLabel}",
-                        _ => $"{window.Label}: {pctLabel}"
+                        DockDisplayMode.BarsOnly => $"{pctLabel} {GetProgressBar(percent, 5)}",
+                        _ => pctLabel
                     };
 
                     IIconInfo? icon = config.DockDisplayMode switch
@@ -97,7 +106,7 @@ public class ProviderDetailsPage : ListPage
                         Icon = icon,
                         MoreCommands = new IContextItem[]
                         {
-                            new CommandContextItem(new CopyTextCommand($"{window.Label}: {pctLabel} • {subtitle}"))
+                            new CommandContextItem(new CopyTextCommand($"{pctLabel} • {subtitle}"))
                             {
                                 Title = "Copy Quota Text"
                             },
