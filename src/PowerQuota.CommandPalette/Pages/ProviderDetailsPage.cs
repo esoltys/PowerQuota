@@ -75,7 +75,7 @@ public class ProviderDetailsPage : ListPage
 
                     string subtitle = string.Join(" • ", subtitleParts);
 
-                    string title = config.DockDisplayMode switch
+                    string itemTitle = config.DockDisplayMode switch
                     {
                         DockDisplayMode.BarsOnly => $"{window.Label}: {GetProgressBar(percent)} {pctLabel}",
                         _ => $"{window.Label}: {pctLabel}"
@@ -92,7 +92,7 @@ public class ProviderDetailsPage : ListPage
                         _ = _refreshService.RefreshProviderAsync(_provider);
                     }))
                     {
-                        Title = title,
+                        Title = itemTitle,
                         Subtitle = subtitle,
                         Icon = icon,
                         MoreCommands = new IContextItem[]
