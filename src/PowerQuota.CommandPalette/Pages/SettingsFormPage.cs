@@ -139,7 +139,6 @@ public class SettingsFormPage : ListPage
         return new ListItem(new AnonymousCommand(() =>
         {
             action();
-            return CommandResult.KeepOpen();
         }))
         {
             Title = displayTitle,
