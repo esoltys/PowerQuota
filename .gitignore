@@ -1,0 +1,30 @@
+# Visual Studio / .NET build artifacts
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio user files
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+*.suo
+
+# Windows temporary files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# App packages
+*.msix
+*.appx
+*.appxbundle
+*.msixbundle
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+
+# Publish output
+publish/

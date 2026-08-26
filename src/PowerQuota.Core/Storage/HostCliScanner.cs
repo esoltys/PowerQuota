@@ -1,0 +1,155 @@
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
+
+namespace PowerQuota.Core.Storage;
+
+public static class HostCliScanner
+{
+    public static string? GetCodexActiveToken()
+    {
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("tokens", out var tokens))
+            {
+                if (tokens.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
+                {
+                    return atStr;
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static string? GetClaudeActiveToken()
+    {
+        var path1 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "auth.json");
+        var path2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
+
+        foreach (var path in new[] { path1, path2 })
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var json = File.ReadAllText(path);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
+                    return atStr;
+                if (doc.RootElement.TryGetProperty("oauth_token", out var ot) && ot.GetString() is { } otStr)
+                    return otStr;
+                if (doc.RootElement.TryGetProperty("token", out var t) && t.GetString() is { } tStr)
+                    return tStr;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    public static (string? AccessToken, string? RefreshToken) ScanCursorIdeTokens()
+    {
+        var dbPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Cursor", "User", "globalStorage", "state.vscdb"
+        );
+
+        if (!File.Exists(dbPath)) return (null, null);
+
+        try
+        {
+            var connStr = new SqliteConnectionStringBuilder
+            {
+                DataSource = dbPath,
+                Mode = SqliteOpenMode.ReadOnly,
+                Cache = SqliteCacheMode.Shared
+            }.ToString();
+
+            using var conn = new SqliteConnection(connStr);
+            conn.Open();
+
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT key, value FROM ItemTable WHERE key IN ('cursorAuth/accessToken', 'cursorAuth/refreshToken')";
+            using var reader = cmd.ExecuteReader();
+
+            string? accessToken = null;
+            string? refreshToken = null;
+
+            while (reader.Read())
+            {
+                var key = reader.GetString(0);
+                var val = reader.GetString(1);
+                if (key == "cursorAuth/accessToken") accessToken = val;
+                else if (key == "cursorAuth/refreshToken") refreshToken = val;
+            }
+
+            return (accessToken, refreshToken);
+        }
+        catch
+        {
+            return (null, null);
+        }
+    }
+
+    public static string? GetGeminiActiveToken()
+    {
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini", "auth.json");
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
+                return atStr;
+        }
+        catch { }
+        return null;
+    }
+
+    public static string? GetCopilotActiveToken()
+    {
+        var localPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "github-copilot", "hosts.json");
+        var configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "github-copilot", "hosts.json");
+
+        foreach (var path in new[] { localPath, configPath })
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var json = File.ReadAllText(path);
+                using var doc = JsonDocument.Parse(json);
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    if (prop.Value.TryGetProperty("oauth_token", out var ot) && ot.GetString() is { } otStr)
+                        return otStr;
+                }
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    public static string? GetOpenCodeKimiApiKey()
+    {
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".opencode", "auth.json");
+        if (!File.Exists(path)) return null;
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("kimi", out var kimiObj))
+            {
+                if (kimiObj.TryGetProperty("api_key", out var key) && key.GetString() is { } kStr)
+                    return kStr;
+            }
+        }
+        catch { }
+        return null;
+    }
+}
+
