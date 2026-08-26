@@ -98,16 +98,6 @@ public class ProviderDetailsPage : ListPage
                         Icon = new IconInfo("\uE825")
                     });
                 }
-
-                if (snapshot.Identity.Plan is { } plan && !string.IsNullOrEmpty(plan))
-                {
-                    items.Add(new ListItem(new NoOpCommand())
-                    {
-                        Title = $"Plan: {plan}",
-                        Subtitle = $"Email: {snapshot.Identity.Email ?? "N/A"}",
-                        Icon = new IconInfo("\uE77B")
-                    });
-                }
             }
             else
             {
