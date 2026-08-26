@@ -75,14 +75,26 @@ public class ProviderDetailsPage : ListPage
 
                     string subtitle = string.Join(" • ", subtitleParts);
 
+                    string title = config.DockDisplayMode switch
+                    {
+                        DockDisplayMode.BarsOnly => $"{window.Label}: {GetProgressBar(percent)} {pctLabel}",
+                        _ => $"{window.Label}: {pctLabel}"
+                    };
+
+                    IIconInfo? icon = config.DockDisplayMode switch
+                    {
+                        DockDisplayMode.PercentageOnly => null,
+                        _ => ProviderIcons.GetIcon(_provider)
+                    };
+
                     items.Add(new ListItem(new AnonymousCommand(() =>
                     {
                         _ = _refreshService.RefreshProviderAsync(_provider);
                     }))
                     {
-                        Title = $"{window.Label}: {pctLabel}",
+                        Title = title,
                         Subtitle = subtitle,
-                        Icon = ProviderIcons.GetIcon(_provider),
+                        Icon = icon,
                         MoreCommands = new IContextItem[]
                         {
                             new CommandContextItem(new CopyTextCommand($"{window.Label}: {pctLabel} • {subtitle}"))
@@ -167,6 +179,13 @@ public class ProviderDetailsPage : ListPage
             ProviderId.Kimi => $"Kimi: Configure API key or OpenCode auth ({error ?? "Key required"})",
             _ => error ?? "Login required"
         };
+    }
+
+    private static string GetProgressBar(float percent, int totalBlocks = 6)
+    {
+        int filled = (int)Math.Round((percent / 100f) * totalBlocks);
+        filled = Math.Clamp(filled, 0, totalBlocks);
+        return new string('▰', filled) + new string('▱', totalBlocks - filled);
     }
 }
 

@@ -157,6 +157,7 @@ public class SettingsFormPage : ListPage
     {
         _configStorage.Save(config);
         RaiseItemsChanged(GetItems().Length);
+        _refreshService.NotifyStateChanged();
     }
 }
 

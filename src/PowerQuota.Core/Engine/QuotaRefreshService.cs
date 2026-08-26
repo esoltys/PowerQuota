@@ -17,6 +17,14 @@ public class QuotaRefreshService : IDisposable
     public AppState State { get; private set; } = new();
     public event EventHandler<AppState>? StateChanged;
 
+    public void NotifyStateChanged()
+    {
+        lock (_stateLock)
+        {
+            StateChanged?.Invoke(this, State);
+        }
+    }
+
     public QuotaRefreshService(ConfigStorage configStorage, WindowsCredentialVault vault, HttpClient? httpClient = null)
     {
         _configStorage = configStorage;
