@@ -108,8 +108,105 @@ public class PowerQuotaCommandProvider : CommandProvider
 
     public override ICommandItem[] GetDockBands()
     {
-        // Pinned quota cards are driven directly by user-pinned ListItems from ProviderDetailsPage
-        return Array.Empty<ICommandItem>();
+        var bands = new List<ICommandItem>();
+        var config = _configStorage.Current;
+
+        foreach (var pid in ProviderIdExtensions.All)
+        {
+            if (!config.EnabledProviders.Contains(pid)) continue;
+
+            var accounts = _refreshService.State.ProviderAccounts.Where(a => a.Provider == pid).ToList();
+            if (accounts.Count == 0 && !config.Accounts.Any(a => a.Provider == pid)) continue;
+
+            foreach (var acc in accounts)
+            {
+                if (acc.Snapshot is { } snapshot && snapshot.Windows.Count > 0)
+                {
+                    foreach (var window in snapshot.Windows)
+                    {
+                        float percent = config.DisplayRemainingNotUsed ? Math.Clamp(100f - window.UsedPercent, 0f, 100f) : window.UsedPercent;
+                        string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
+
+                        string resetFormatted = window.FormatResetText(config.ShowRelativeResetTimes);
+                        string resetPhrase;
+                        if (string.IsNullOrEmpty(resetFormatted))
+                        {
+                            resetPhrase = window.Label;
+                        }
+                        else if (resetFormatted.StartsWith("Resets ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            resetPhrase = $"{window.Label} resets {resetFormatted.Substring(7)}";
+                        }
+                        else
+                        {
+                            resetPhrase = $"{window.Label} {resetFormatted.ToLowerInvariant()}";
+                        }
+
+                        var subtitleParts = new List<string> { resetPhrase };
+                        if (!string.IsNullOrEmpty(window.ResetDescription))
+                        {
+                            subtitleParts.Add(window.ResetDescription);
+                        }
+                        if (accounts.Count > 1)
+                        {
+                            subtitleParts.Add(acc.Label);
+                        }
+
+                        string subtitle = string.Join(" • ", subtitleParts);
+
+                        string itemTitle = config.DockDisplayMode switch
+                        {
+                            DockDisplayMode.BarsOnly => GetProgressBar(percent, 8),
+                            _ => pctLabel
+                        };
+
+                        IIconInfo? icon = config.DockDisplayMode switch
+                        {
+                            DockDisplayMode.PercentageOnly => null,
+                            _ => ProviderIcons.GetIcon(pid)
+                        };
+
+                        var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+                        bands.Add(new CommandItem(page)
+                        {
+                            Title = itemTitle,
+                            Subtitle = subtitle,
+                            Icon = icon,
+                            MoreCommands = new IContextItem[]
+                            {
+                                new CommandContextItem(new AnonymousCommand(() =>
+                                {
+                                    _ = _refreshService.RefreshProviderAsync(pid);
+                                }))
+                                {
+                                    Title = "Refresh Quota"
+                                }
+                            }
+                        });
+                    }
+                }
+                else
+                {
+                    string status = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
+                    var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+                    bands.Add(new CommandItem(page)
+                    {
+                        Title = $"{pid.GetLabel()} Quota",
+                        Subtitle = status,
+                        Icon = ProviderIcons.GetIcon(pid)
+                    });
+                }
+            }
+        }
+
+        return bands.ToArray();
+    }
+
+    private static string GetProgressBar(float percent, int totalBlocks = 8)
+    {
+        int filled = (int)Math.Round((percent / 100f) * totalBlocks);
+        filled = Math.Clamp(filled, 0, totalBlocks);
+        return new string('▰', filled) + new string('▱', totalBlocks - filled);
     }
 
     public override ICommandItem? GetCommandItem(string id)
