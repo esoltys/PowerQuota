@@ -132,6 +132,23 @@ public class ProviderTests
     }
 
     [Fact]
+    public void UsageWindow_FormatResetTime_FormatsDaysAndHoursAccurately()
+    {
+        // 1. Multi-day reset (e.g. 45 hours away)
+        var futureReset = DateTimeOffset.UtcNow.AddHours(45.5);
+        var text = UsageWindow.FormatResetTime(futureReset);
+        var expectedDay = futureReset.ToLocalTime().ToString("dddd");
+        Assert.StartsWith("Resets ", text);
+        Assert.Contains(expectedDay, text);
+        Assert.Contains("at ", text);
+
+        // 2. Short window relative (< 24h, e.g. 2h 30m away)
+        var shortReset = DateTimeOffset.UtcNow.AddHours(2.5);
+        var relText = UsageWindow.FormatResetTime(shortReset, showRelative: true);
+        Assert.StartsWith("Resets in 2h ", relText);
+    }
+
+    [Fact]
     public void CursorProvider_ParsesFastAndTotalRequests()
     {
         var json = """

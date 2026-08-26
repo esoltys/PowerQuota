@@ -58,10 +58,11 @@ public class ProviderDetailsPage : ListPage
                     string resetText = string.Empty;
                     if (window.ResetAt.HasValue)
                     {
-                        var span = window.ResetAt.Value - DateTimeOffset.UtcNow;
-                        resetText = span.TotalSeconds > 0
-                            ? $" • Resets in {(int)span.TotalHours}h {span.Minutes}m"
-                            : " • Resetting soon";
+                        var formatted = window.FormatResetText(config.ShowRelativeResetTimes);
+                        if (!string.IsNullOrEmpty(formatted))
+                        {
+                            resetText = $" • {formatted}";
+                        }
                     }
 
                     items.Add(new ListItem(new AnonymousCommand(() =>

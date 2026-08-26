@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Serialization;
 
 namespace PowerQuota.Core.Models;
@@ -18,6 +19,57 @@ public class UsageWindow
 
     [JsonPropertyName("reset_description")]
     public string? ResetDescription { get; set; }
+
+    public string FormatResetText(bool showRelative = true)
+    {
+        if (!ResetAt.HasValue) return string.Empty;
+        return FormatResetTime(ResetAt.Value, showRelative);
+    }
+
+    public static string FormatResetTime(DateTimeOffset resetAtUtc, bool showRelative = true)
+    {
+        var nowUtc = DateTimeOffset.UtcNow;
+        var span = resetAtUtc - nowUtc;
+        if (span.TotalSeconds <= 0) return "Resetting soon";
+
+        var localReset = resetAtUtc.ToLocalTime();
+        var localNow = nowUtc.ToLocalTime();
+
+        // 1. Multi-day / 24+ hours away: Always show day and time (e.g. "Friday at 2:00 PM")
+        if (span.TotalHours >= 24)
+        {
+            if (localReset.Date == localNow.Date.AddDays(1))
+            {
+                return $"Resets tomorrow at {localReset.ToString("t", CultureInfo.CurrentCulture)}";
+            }
+
+            if (span.TotalDays < 7)
+            {
+                return $"Resets {localReset.ToString("dddd", CultureInfo.CurrentCulture)} at {localReset.ToString("t", CultureInfo.CurrentCulture)}";
+            }
+
+            return $"Resets {localReset.ToString("MMM d", CultureInfo.CurrentCulture)} at {localReset.ToString("t", CultureInfo.CurrentCulture)}";
+        }
+
+        // 2. Short window (< 24 hours): If absolute time is preferred
+        if (!showRelative)
+        {
+            if (localReset.Date == localNow.Date)
+            {
+                return $"Resets today at {localReset.ToString("t", CultureInfo.CurrentCulture)}";
+            }
+            return $"Resets tomorrow at {localReset.ToString("t", CultureInfo.CurrentCulture)}";
+        }
+
+        // 3. Short window (< 24 hours): Relative countdown (e.g. "Resets in 2h 32m")
+        int hours = (int)span.TotalHours;
+        int minutes = span.Minutes;
+        if (hours > 0)
+        {
+            return $"Resets in {hours}h {minutes}m";
+        }
+        return $"Resets in {minutes}m";
+    }
 }
 
 public class ProviderCost
