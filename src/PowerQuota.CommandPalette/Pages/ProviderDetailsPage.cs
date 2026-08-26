@@ -86,7 +86,7 @@ public class ProviderDetailsPage : ListPage
 
                     string itemTitle = config.DockDisplayMode switch
                     {
-                        DockDisplayMode.BarsOnly => $"{pctLabel} {GetProgressBar(percent, 5)}",
+                        DockDisplayMode.BarsOnly => GetProgressBar(percent, 8),
                         _ => pctLabel
                     };
 

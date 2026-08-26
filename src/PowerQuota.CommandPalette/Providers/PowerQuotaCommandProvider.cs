@@ -108,59 +108,8 @@ public class PowerQuotaCommandProvider : CommandProvider
 
     public override ICommandItem[] GetDockBands()
     {
-        var bands = new List<ICommandItem>();
-        var config = _configStorage.Current;
-
-        // Produce a persistent dock band for each enabled provider with configured accounts
-        foreach (var pid in ProviderIdExtensions.All)
-        {
-            if (!config.EnabledProviders.Contains(pid)) continue;
-
-            var acc = _refreshService.State.ProviderAccounts.FirstOrDefault(a => a.Provider == pid);
-            if (acc == null && !config.Accounts.Any(a => a.Provider == pid)) continue;
-
-            string status = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
-            string title = config.DockDisplayMode switch
-            {
-                DockDisplayMode.PercentageOnly => acc?.Snapshot?.HeadlineWindow is { } w
-                    ? $"{(config.DisplayRemainingNotUsed ? 100f - w.UsedPercent : w.UsedPercent):0}%"
-                    : pid.GetLabel(),
-                _ => $"{pid.GetLabel()} {(acc?.Snapshot?.HeadlineWindow is { } hw ? $"{(config.DisplayRemainingNotUsed ? 100f - hw.UsedPercent : hw.UsedPercent):0}%" : "")}".Trim()
-            };
-
-            var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
-            var bandItem = new CommandItem(page)
-            {
-                Title = title,
-                Subtitle = $"{pid.GetLabel()}: {status}",
-                Icon = ProviderIcons.GetIcon(pid),
-                MoreCommands = new IContextItem[]
-                {
-                    new CommandContextItem(new AnonymousCommand(() =>
-                    {
-                        _ = _refreshService.RefreshProviderAsync(pid);
-                    }))
-                    {
-                        Title = "Refresh"
-                    }
-                }
-            };
-
-            bands.Add(bandItem);
-        }
-
-        // If no dock bands yet, provide the main PowerQuota launcher band
-        if (bands.Count == 0)
-        {
-            bands.Add(new CommandItem(_overviewPage)
-            {
-                Title = "PowerQuota",
-                Subtitle = "AI Quota Tracker • Click to configure",
-                Icon = new IconInfo("\uE945")
-            });
-        }
-
-        return bands.ToArray();
+        // Pinned quota cards are driven directly by user-pinned ListItems from ProviderDetailsPage
+        return Array.Empty<ICommandItem>();
     }
 
     public override ICommandItem? GetCommandItem(string id)
