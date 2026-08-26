@@ -82,7 +82,26 @@ public static class HostCliScanner
 
     public static string? GetClaudeActiveToken()
     {
-        // 1. Check Windows Credential Manager (Claude Code CLI storage)
+        // 1. Check ~/.claude/.credentials.json (Claude Code CLI standard storage)
+        var credJsonPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", ".credentials.json");
+        if (File.Exists(credJsonPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(credJsonPath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth))
+                {
+                    if (oauth.TryGetProperty("accessToken", out var at) && at.GetString() is { } atStr && !string.IsNullOrEmpty(atStr))
+                    {
+                        return atStr;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 2. Check Windows Credential Manager (Legacy / Desktop storage)
         var credTargets = new[]
         {
             "analytics:claude-code:access-token.com.agentharbor.app",
@@ -97,7 +116,7 @@ public static class HostCliScanner
             if (!string.IsNullOrEmpty(token)) return token;
         }
 
-        // 2. Check local configuration files
+        // 3. Check local configuration files
         var path1 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "auth.json");
         var path2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
 
