@@ -84,14 +84,14 @@ public class PowerQuotaCommandProvider : CommandProvider
             _ = _refreshService.RefreshAllAsync();
         }))
         {
-            Title = "Refresh All AI Quotas",
+            Title = "Refresh All Quotas",
             Subtitle = "Query all providers for current quota metrics",
             Icon = new IconInfo("\uE72C")
         });
 
         commands.Add(new CommandItem(_addAccountPage)
         {
-            Title = "Add AI Account...",
+            Title = "Add Account...",
             Subtitle = "Connect a new provider account to PowerQuota",
             Icon = new IconInfo("\uE710")
         });

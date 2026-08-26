@@ -20,7 +20,7 @@ public class ProviderDetailsPage : ListPage
         _refreshService = refreshService;
         _configStorage = configStorage;
         _vault = vault;
-        Title = $"{provider.GetLabel()} AI Quotas";
+        Title = $"{provider.GetLabel()} Quota";
         PlaceholderText = $"Filter {provider.GetLabel()} quotas...";
 
         _refreshService.StateChanged += (_, _) => RaiseItemsChanged(GetItems().Length);

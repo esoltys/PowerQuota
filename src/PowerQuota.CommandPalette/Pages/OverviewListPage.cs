@@ -18,8 +18,8 @@ public class OverviewListPage : ListPage
         _refreshService = refreshService;
         _configStorage = configStorage;
         _vault = vault;
-        Title = "PowerQuota AI Quotas";
-        PlaceholderText = "Search active AI quotas...";
+        Title = "PowerQuota";
+        PlaceholderText = "Search quotas...";
 
         _refreshService.StateChanged += (_, _) => RaiseItemsChanged(GetItems().Length);
     }
