@@ -35,23 +35,27 @@ public class SettingsFormPage : ListPage
 
         var dockStylePage = new SettingChoicePage(
             title: "Dock Band Style",
-            choices: new[]
+            choicesProvider: () =>
             {
-                new SettingChoice("Logo and Percentage", "Display provider icon and percentage text (e.g. ✦ 76% left)", config.DockDisplayMode == DockDisplayMode.LogoAndPercentage, () =>
+                var cur = _configStorage.Current;
+                return new[]
                 {
-                    config.DockDisplayMode = DockDisplayMode.LogoAndPercentage;
-                    Save(config);
-                }),
-                new SettingChoice("Percentage Only", "Display percentage text without brand icon", config.DockDisplayMode == DockDisplayMode.PercentageOnly, () =>
-                {
-                    config.DockDisplayMode = DockDisplayMode.PercentageOnly;
-                    Save(config);
-                }),
-                new SettingChoice("Usage Bars Only", "Display compact visual progress bars only", config.DockDisplayMode == DockDisplayMode.BarsOnly, () =>
-                {
-                    config.DockDisplayMode = DockDisplayMode.BarsOnly;
-                    Save(config);
-                })
+                    new SettingChoice("Logo and Percentage", "Display provider icon and percentage text (e.g. ✦ 76% left)", cur.DockDisplayMode == DockDisplayMode.LogoAndPercentage, () =>
+                    {
+                        cur.DockDisplayMode = DockDisplayMode.LogoAndPercentage;
+                        Save(cur);
+                    }),
+                    new SettingChoice("Percentage Only", "Display percentage text without brand icon", cur.DockDisplayMode == DockDisplayMode.PercentageOnly, () =>
+                    {
+                        cur.DockDisplayMode = DockDisplayMode.PercentageOnly;
+                        Save(cur);
+                    }),
+                    new SettingChoice("Usage Bars Only", "Display compact visual progress bars only", cur.DockDisplayMode == DockDisplayMode.BarsOnly, () =>
+                    {
+                        cur.DockDisplayMode = DockDisplayMode.BarsOnly;
+                        Save(cur);
+                    })
+                };
             }
         );
 
@@ -66,18 +70,22 @@ public class SettingsFormPage : ListPage
         string quotaFormatLabel = config.DisplayRemainingNotUsed ? "Remaining Quota (e.g. 76% left)" : "Used Quota (e.g. 24% used)";
         var quotaFormatPage = new SettingChoicePage(
             title: "Quota Percentage Format",
-            choices: new[]
+            choicesProvider: () =>
             {
-                new SettingChoice("Remaining Quota (e.g. 76% left)", "Display how much quota is available", config.DisplayRemainingNotUsed, () =>
+                var cur = _configStorage.Current;
+                return new[]
                 {
-                    config.DisplayRemainingNotUsed = true;
-                    Save(config);
-                }),
-                new SettingChoice("Used Quota (e.g. 24% used)", "Display how much quota has been consumed", !config.DisplayRemainingNotUsed, () =>
-                {
-                    config.DisplayRemainingNotUsed = false;
-                    Save(config);
-                })
+                    new SettingChoice("Remaining Quota (e.g. 76% left)", "Display how much quota is available", cur.DisplayRemainingNotUsed, () =>
+                    {
+                        cur.DisplayRemainingNotUsed = true;
+                        Save(cur);
+                    }),
+                    new SettingChoice("Used Quota (e.g. 24% used)", "Display how much quota has been consumed", !cur.DisplayRemainingNotUsed, () =>
+                    {
+                        cur.DisplayRemainingNotUsed = false;
+                        Save(cur);
+                    })
+                };
             }
         );
 
@@ -92,18 +100,22 @@ public class SettingsFormPage : ListPage
         string resetTimeLabel = config.ShowRelativeResetTimes ? "Relative Countdown (e.g. in 2h 15m)" : "Absolute Clock Time (e.g. Friday at 2:00 PM)";
         var resetTimePage = new SettingChoicePage(
             title: "Reset Time Format",
-            choices: new[]
+            choicesProvider: () =>
             {
-                new SettingChoice("Relative Countdown (e.g. in 2h 15m)", "Show dynamic countdown until quota resets", config.ShowRelativeResetTimes, () =>
+                var cur = _configStorage.Current;
+                return new[]
                 {
-                    config.ShowRelativeResetTimes = true;
-                    Save(config);
-                }),
-                new SettingChoice("Absolute Clock Time (e.g. Friday at 2:00 PM)", "Show local clock time when quota resets", !config.ShowRelativeResetTimes, () =>
-                {
-                    config.ShowRelativeResetTimes = false;
-                    Save(config);
-                })
+                    new SettingChoice("Relative Countdown (e.g. in 2h 15m)", "Show dynamic countdown until quota resets", cur.ShowRelativeResetTimes, () =>
+                    {
+                        cur.ShowRelativeResetTimes = true;
+                        Save(cur);
+                    }),
+                    new SettingChoice("Absolute Clock Time (e.g. Friday at 2:00 PM)", "Show local clock time when quota resets", !cur.ShowRelativeResetTimes, () =>
+                    {
+                        cur.ShowRelativeResetTimes = false;
+                        Save(cur);
+                    })
+                };
             }
         );
 
@@ -117,13 +129,17 @@ public class SettingsFormPage : ListPage
         // 4. Auto-Refresh Interval
         var refreshIntervalPage = new SettingChoicePage(
             title: "Auto-Refresh Interval",
-            choices: new[]
+            choicesProvider: () =>
             {
-                new SettingChoice("Every 1 Minute", "Poll provider APIs every minute", config.RefreshIntervalMinutes == 1, () => { config.RefreshIntervalMinutes = 1; Save(config); }),
-                new SettingChoice("Every 5 Minutes", "Poll provider APIs every 5 minutes", config.RefreshIntervalMinutes == 5, () => { config.RefreshIntervalMinutes = 5; Save(config); }),
-                new SettingChoice("Every 15 Minutes", "Poll provider APIs every 15 minutes (recommended)", config.RefreshIntervalMinutes == 15, () => { config.RefreshIntervalMinutes = 15; Save(config); }),
-                new SettingChoice("Every 30 Minutes", "Poll provider APIs every 30 minutes", config.RefreshIntervalMinutes == 30, () => { config.RefreshIntervalMinutes = 30; Save(config); }),
-                new SettingChoice("Every 60 Minutes", "Poll provider APIs every 60 minutes", config.RefreshIntervalMinutes == 60, () => { config.RefreshIntervalMinutes = 60; Save(config); })
+                var cur = _configStorage.Current;
+                return new[]
+                {
+                    new SettingChoice("Every 1 Minute", "Poll provider APIs every minute", cur.RefreshIntervalMinutes == 1, () => { cur.RefreshIntervalMinutes = 1; Save(cur); }),
+                    new SettingChoice("Every 5 Minutes", "Poll provider APIs every 5 minutes", cur.RefreshIntervalMinutes == 5, () => { cur.RefreshIntervalMinutes = 5; Save(cur); }),
+                    new SettingChoice("Every 15 Minutes", "Poll provider APIs every 15 minutes (recommended)", cur.RefreshIntervalMinutes == 15, () => { cur.RefreshIntervalMinutes = 15; Save(cur); }),
+                    new SettingChoice("Every 30 Minutes", "Poll provider APIs every 30 minutes", cur.RefreshIntervalMinutes == 30, () => { cur.RefreshIntervalMinutes = 30; Save(cur); }),
+                    new SettingChoice("Every 60 Minutes", "Poll provider APIs every 60 minutes", cur.RefreshIntervalMinutes == 60, () => { cur.RefreshIntervalMinutes = 60; Save(cur); })
+                };
             }
         );
 
@@ -141,7 +157,6 @@ public class SettingsFormPage : ListPage
     {
         _configStorage.Save(config);
         RaiseItemsChanged(GetItems().Length);
-        _ = _refreshService.RefreshAllAsync();
     }
 }
 
@@ -163,28 +178,29 @@ public class SettingChoice
 
 public class SettingChoicePage : ListPage
 {
-    private readonly IEnumerable<SettingChoice> _choices;
+    private readonly Func<IReadOnlyList<SettingChoice>> _choicesProvider;
 
-    public SettingChoicePage(string title, IEnumerable<SettingChoice> choices)
+    public SettingChoicePage(string title, Func<IReadOnlyList<SettingChoice>> choicesProvider)
     {
         Title = title;
         PlaceholderText = $"Select an option for {title}...";
-        _choices = choices;
+        _choicesProvider = choicesProvider;
     }
 
     public override IListItem[] GetItems()
     {
         var items = new List<IListItem>();
-        foreach (var choice in _choices)
+        foreach (var choice in _choicesProvider())
         {
             items.Add(new ListItem(new AnonymousCommand(() =>
             {
                 choice.SelectAction();
+                RaiseItemsChanged(GetItems().Length);
             }))
             {
                 Title = choice.Title,
                 Subtitle = choice.Subtitle,
-                Icon = new IconInfo(choice.IsSelected ? "\uE73E" : "\uE739") // Checkmark badge
+                Icon = new IconInfo(choice.IsSelected ? "\uE73E" : "\uE739")
             });
         }
         return items.ToArray();

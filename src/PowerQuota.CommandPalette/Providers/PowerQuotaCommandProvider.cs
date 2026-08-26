@@ -133,7 +133,7 @@ public class PowerQuotaCommandProvider : CommandProvider
             {
                 Title = title,
                 Subtitle = $"{pid.GetLabel()}: {status}",
-                Icon = new IconInfo(acc?.Health == ProviderHealth.Error ? "\uE783" : "\uE945"),
+                Icon = ProviderIcons.GetIcon(pid),
                 MoreCommands = new IContextItem[]
                 {
                     new CommandContextItem(new AnonymousCommand(() =>
