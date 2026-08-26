@@ -1,24 +1,44 @@
+using System.Runtime.InteropServices;
 using Microsoft.CommandPalette.Extensions;
-using Shmuelie.WinRTServer;
 
 namespace PowerQuota.CommandPalette;
 
 public static class Program
 {
+    [DllImport("kernel32.dll")]
+    private static extern bool AttachConsole(int dwProcessId);
+
     public static async Task Main(string[] args)
     {
+        var logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "PowerQuota", "extension.log");
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(logPath)!);
+        System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] Main started with args: {string.Join(" ", args)}\n");
+
         if (args.Contains("-RegisterProcessAsComServer", StringComparer.OrdinalIgnoreCase))
         {
-            var tcs = new TaskCompletionSource();
-            await using var server = new ComServer();
-            server.RegisterClass<PowerQuotaExtension, IExtension>(null!);
-            server.Empty += (_, _) => tcs.TrySetResult();
-            server.Start();
-            await tcs.Task;
+            System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] Registering ExtensionServer...\n");
+            try
+            {
+                using var server = new ExtensionServer();
+                server.RegisterExtension<PowerQuotaExtension>(() =>
+                {
+                    System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] Creating PowerQuotaExtension instance\n");
+                    return new PowerQuotaExtension();
+                });
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] Extension registered. Waiting for host requests...\n");
+                PowerQuotaExtension.DisposedEvent.WaitOne();
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] DisposedEvent signaled, exiting cleanly\n");
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] ERROR: {ex}\n");
+                throw;
+            }
         }
         else
         {
-            Console.WriteLine("=== PowerQuota for Windows ===");
+            AttachConsole(-1);
+            Console.WriteLine("\n=== PowerQuota for Windows ===");
             Console.WriteLine("PowerToys Command Palette & Dock Extension");
             Console.WriteLine("Testing AI Provider discovery and quota fetch...\n");
 

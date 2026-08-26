@@ -1,5 +1,6 @@
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using PowerQuota.CommandPalette.Providers;
 using PowerQuota.Core.Engine;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
@@ -19,8 +20,8 @@ public class ProviderDetailsPage : ListPage
         _refreshService = refreshService;
         _configStorage = configStorage;
         _vault = vault;
-        Title = $"{_provider.GetLabel()} Quota & Accounts";
-        PlaceholderText = $"Filter {_provider.GetLabel()} quotas...";
+        Title = $"{provider.GetLabel()} AI Quotas";
+        PlaceholderText = $"Filter {provider.GetLabel()} quotas...";
 
         _refreshService.StateChanged += (_, _) => RaiseItemsChanged(GetItems().Length);
     }
@@ -70,7 +71,7 @@ public class ProviderDetailsPage : ListPage
                     {
                         Title = $"{window.Label}: {pctLabel}",
                         Subtitle = $"{title}{resetText} • {window.ResetDescription ?? ""}",
-                        Icon = new IconInfo(window.UsedPercent > 90 ? "\uE783" : "\uE945"),
+                        Icon = ProviderIcons.GetIcon(_provider),
                         MoreCommands = new IContextItem[]
                         {
                             new CommandContextItem(new CopyTextCommand($"{window.Label}: {pctLabel}{resetText}"))
@@ -110,30 +111,61 @@ public class ProviderDetailsPage : ListPage
             }
             else
             {
+                string guidance = GetLoginGuidance(_provider, acc.Error);
+                string itemTitle = accounts.Count > 1 ? $"{_provider.GetLabel()} Quota ({acc.Label})" : $"{_provider.GetLabel()} Quota";
                 items.Add(new ListItem(new AnonymousCommand(() =>
                 {
                     _ = _refreshService.RefreshProviderAsync(_provider);
                 }))
                 {
-                    Title = acc.Label,
-                    Subtitle = acc.Error ?? "Not refreshed yet",
-                    Icon = new IconInfo("\uE783")
+                    Title = itemTitle,
+                    Subtitle = guidance,
+                    Icon = ProviderIcons.GetIcon(_provider),
+                    MoreCommands = new IContextItem[]
+                    {
+                        new CommandContextItem(new AnonymousCommand(() =>
+                        {
+                            _ = _refreshService.RefreshProviderAsync(_provider);
+                        }))
+                        {
+                            Title = "Refresh / Scan"
+                        },
+                        new CommandContextItem(new AnonymousCommand(() =>
+                        {
+                            config.Accounts.RemoveAll(a => a.Id == acc.AccountId);
+                            _configStorage.Save(config);
+                            _vault.RemoveAccount(acc.AccountId);
+                            _ = _refreshService.RefreshAllAsync();
+                        }))
+                        {
+                            Title = "Remove Account"
+                        }
+                    }
                 });
             }
         }
 
-        // Action items
-        items.Add(new ListItem(new AnonymousCommand(() =>
-        {
-            _ = _refreshService.RefreshProviderAsync(_provider);
-        }))
-        {
-            Title = "Refresh Quota Now",
-            Subtitle = "Query the provider API for updated quotas",
-            Icon = new IconInfo("\uE72C")
-        });
-
         return items.ToArray();
+    }
+
+    private static string GetLoginGuidance(ProviderId provider, string? error)
+    {
+        if (!string.IsNullOrEmpty(error) && error.StartsWith("Rate limited", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"API Rate Limit Cooldown • {error}";
+        }
+
+        return provider switch
+        {
+            ProviderId.Claude => $"Claude Code CLI: Run 'claude' in terminal to login ({error ?? "Login required"})",
+            ProviderId.Codex => $"ChatGPT / Codex CLI: Run 'codex login' in terminal ({error ?? "Login required"})",
+            ProviderId.Cursor => $"Cursor IDE: Sign into Cursor to refresh session ({error ?? "Session expired"})",
+            ProviderId.Gemini => $"Gemini: Run 'gemini' in terminal ({error ?? "Login required"})",
+            ProviderId.Copilot => $"GitHub Copilot: Sign in via VS Code or Copilot CLI ({error ?? "Login required"})",
+            ProviderId.Minimax => $"Minimax: Set API key ({error ?? "Key required"})",
+            ProviderId.Kimi => $"Kimi: Configure API key or OpenCode auth ({error ?? "Key required"})",
+            _ => error ?? "Login required"
+        };
     }
 }
 

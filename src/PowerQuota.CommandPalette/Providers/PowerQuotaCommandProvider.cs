@@ -19,7 +19,7 @@ public class PowerQuotaCommandProvider : CommandProvider
     public PowerQuotaCommandProvider()
     {
         Id = "PowerQuota.CommandPalette";
-        DisplayName = "PowerQuota AI Quota Tracker";
+        DisplayName = "PowerQuota";
         Icon = new IconInfo("\uE945");
 
         _refreshService = new QuotaRefreshService(_configStorage, _vault);
@@ -35,31 +35,36 @@ public class PowerQuotaCommandProvider : CommandProvider
 
     public override ICommandItem[] TopLevelCommands()
     {
+        var logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "PowerQuota", "extension.log");
+        System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] TopLevelCommands called\n");
+
         var commands = new List<ICommandItem>();
         var config = _configStorage.Current;
 
         // 1. Primary entrypoint: PowerQuota Overview
         commands.Add(new CommandItem(_overviewPage)
         {
-            Title = "PowerQuota: AI Quota Tracker",
+            Title = "PowerQuota",
             Subtitle = "Monitor Claude, Codex, Cursor, Gemini, Copilot, Minimax, and Kimi usage",
-            Icon = new IconInfo("\uE945")
+            Icon = ProviderIcons.GetIcon()
         });
 
-        // 2. Individual provider items for quick access
+        // 2. Individual provider items for quick access (only if accounts exist)
         foreach (var pid in ProviderIdExtensions.All)
         {
             if (!config.EnabledProviders.Contains(pid)) continue;
 
             var acc = _refreshService.State.ProviderAccounts.FirstOrDefault(a => a.Provider == pid);
-            string statusLine = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "No account configured";
+            if (acc == null && !config.Accounts.Any(a => a.Provider == pid)) continue;
+
+            string statusLine = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
 
             var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
             commands.Add(new CommandItem(page)
             {
                 Title = $"{pid.GetLabel()} Quota",
                 Subtitle = statusLine,
-                Icon = new IconInfo(acc?.Health == ProviderHealth.Error ? "\uE783" : "\uE945"),
+                Icon = ProviderIcons.GetIcon(pid),
                 MoreCommands = new IContextItem[]
                 {
                     new CommandContextItem(new AnonymousCommand(() =>
@@ -87,7 +92,7 @@ public class PowerQuotaCommandProvider : CommandProvider
         commands.Add(new CommandItem(_addAccountPage)
         {
             Title = "Add AI Account...",
-            Subtitle = "Connect a new provider account",
+            Subtitle = "Connect a new provider account to PowerQuota",
             Icon = new IconInfo("\uE710")
         });
 

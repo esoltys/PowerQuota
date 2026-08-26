@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net9.0-windows10.0.22621.0</TargetFramework>
+    <TargetFramework>net9.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -11,12 +11,11 @@
     <RootNamespace>PowerQuota.CommandPalette</RootNamespace>
     <AssemblyName>PowerQuota.CommandPalette</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <CsWinRTEnabled>false</CsWinRTEnabled>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CommandPalette.Extensions" Version="0.9.260303001" />
-    <PackageReference Include="Shmuelie.WinRTServer" Version="2.2.1" />
+    <PackageReference Include="System.Drawing.Common" Version="9.0.2" />
   </ItemGroup>
 
   <ItemGroup>

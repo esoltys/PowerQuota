@@ -1,5 +1,6 @@
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using PowerQuota.CommandPalette.Providers;
 using PowerQuota.Core.Engine;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
@@ -34,7 +35,7 @@ public class AddAccountFormPage : ListPage
             {
                 Title = $"Connect {provider.GetLabel()}",
                 Subtitle = GetProviderConnectDescription(provider),
-                Icon = new IconInfo("\uE710")
+                Icon = ProviderIcons.GetIcon(provider)
             });
         }
 
@@ -56,16 +57,20 @@ public class AddAccountFormPage : ListPage
     private void AutoScanOrConnect(ProviderId provider)
     {
         var config = _configStorage.Current;
-        var newAccount = new AccountConfig
+        var existing = config.Accounts.FirstOrDefault(a => a.Provider == provider);
+        if (existing == null)
         {
-            Provider = provider,
-            Label = $"{provider.GetLabel()} Account",
-            CreatedAt = DateTimeOffset.UtcNow,
-            UpdatedAt = DateTimeOffset.UtcNow
-        };
+            var newAccount = new AccountConfig
+            {
+                Provider = provider,
+                Label = $"{provider.GetLabel()} Quota",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
 
-        config.Accounts.Add(newAccount);
-        _configStorage.Save(config);
+            config.Accounts.Add(newAccount);
+            _configStorage.Save(config);
+        }
         _ = _refreshService.RefreshProviderAsync(provider);
     }
 }

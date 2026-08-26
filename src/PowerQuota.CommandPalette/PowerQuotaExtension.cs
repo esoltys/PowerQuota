@@ -9,9 +9,14 @@ namespace PowerQuota.CommandPalette;
 public sealed partial class PowerQuotaExtension : IExtension
 {
     private readonly PowerQuotaCommandProvider _commandProvider = new();
+    private static readonly System.Threading.ManualResetEvent _disposedEvent = new(false);
+
+    public static System.Threading.ManualResetEvent DisposedEvent => _disposedEvent;
 
     public object? GetProvider(ProviderType providerType)
     {
+        var logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "PowerQuota", "extension.log");
+        System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] GetProvider called for: {providerType}\n");
         return providerType switch
         {
             ProviderType.Commands => _commandProvider,
@@ -21,7 +26,10 @@ public sealed partial class PowerQuotaExtension : IExtension
 
     public void Dispose()
     {
+        var logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "PowerQuota", "extension.log");
+        System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] PowerQuotaExtension.Dispose called\n");
         _commandProvider.Dispose();
+        _disposedEvent.Set();
     }
 }
 

@@ -90,7 +90,7 @@ PowerQuota/
 
 2. Register the extension manifest with Windows:
    ```powershell
-   Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net9.0-windows10.0.22621.0\win-x64\publish\AppxManifest.xml"
+   Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net9.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
    ```
 
 3. Confirm registration:
@@ -101,8 +101,38 @@ PowerQuota/
 
 4. Open **PowerToys Settings** -> **Command Palette**:
    - Enable **Command Palette** and **Enable Dock**.
-   - Press `Alt + Space` (or your configured shortcut) and type `powerquota` to view your AI quotas.
+   - Press `Win + Shift + C` (or configured shortcut) and type `powerquota` to view your AI quotas.
    - Pinned dock bands will appear in your persistent PowerToys Dock bar with real-time percentages!
+
+---
+
+## Local Development & Fast Iteration
+
+When developing or modifying PowerQuota locally, you can quickly iterate without reinstalling the entire package:
+
+### 1. Enable External Reload in Command Palette
+1. Open **Command Palette Settings** (`Win + Shift + C` then press `Ctrl + ,`).
+2. Navigate to **Extensions** -> **Installed** (or scroll to the developer options).
+3. Toggle **Enable external reload** to **On**.
+
+### 2. Fast Build & Reload Script
+Whenever you make C# or UI changes, run this one-liner in PowerShell to rebuild and instantly hot-reload Command Palette:
+
+```powershell
+Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
+dotnet publish src/PowerQuota.CommandPalette/PowerQuota.CommandPalette.csproj -c Release -r win-x64 --self-contained false
+Start-Process "x-cmdpal://reload"
+```
+
+### 3. Diagnostic Logs & Data Files
+- **Live Extension Logs**:
+  ```powershell
+  Get-Content "$env:LOCALAPPDATA\PowerQuota\extension.log" -Wait -Tail 30
+  ```
+- **Configuration File**:
+  `$env:LOCALAPPDATA\PowerQuota\config.json`
+- **Encrypted Token Vault**:
+  `$env:LOCALAPPDATA\PowerQuota\vault.dat` (Protected with Windows DPAPI)
 
 ---
 

@@ -7,7 +7,7 @@ namespace PowerQuota.Core.Providers;
 
 public class ClaudeProvider : IProviderAdapter
 {
-    private const string UsageEndpoint = "https://api.anthropic.com/api/claude_code/usage";
+    private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";
 
     public ProviderId Id => ProviderId.Claude;
 

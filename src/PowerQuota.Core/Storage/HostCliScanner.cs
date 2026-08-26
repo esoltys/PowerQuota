@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
@@ -5,6 +7,58 @@ namespace PowerQuota.Core.Storage;
 
 public static class HostCliScanner
 {
+    [DllImport("advapi32.dll", EntryPoint = "CredReadW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CredRead(string target, int type, int reservedFlag, out IntPtr credentialPtr);
+
+    [DllImport("advapi32.dll", EntryPoint = "CredFree", SetLastError = true)]
+    private static extern void CredFree(IntPtr buffer);
+
+    private const int CRED_TYPE_GENERIC = 1;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct CREDENTIAL
+    {
+        public int Flags;
+        public int Type;
+        public IntPtr TargetName;
+        public IntPtr Comment;
+        public long LastWritten;
+        public int CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public int Persist;
+        public int AttributeCount;
+        public IntPtr Attributes;
+        public IntPtr TargetAlias;
+        public IntPtr UserName;
+    }
+
+    public static string? ReadCredentialManagerSecret(string targetName)
+    {
+        if (CredRead(targetName, CRED_TYPE_GENERIC, 0, out var credPtr))
+        {
+            try
+            {
+                var cred = Marshal.PtrToStructure<CREDENTIAL>(credPtr);
+                if (cred.CredentialBlob != IntPtr.Zero && cred.CredentialBlobSize > 0)
+                {
+                    var bytes = new byte[cred.CredentialBlobSize];
+                    Marshal.Copy(cred.CredentialBlob, bytes, 0, cred.CredentialBlobSize);
+
+                    string text = (bytes.Length >= 2 && bytes[1] == 0)
+                        ? Encoding.Unicode.GetString(bytes)
+                        : Encoding.UTF8.GetString(bytes);
+
+                    return text.Trim('\0', '\r', '\n', ' ', '"');
+                }
+            }
+            finally
+            {
+                CredFree(credPtr);
+            }
+        }
+        return null;
+    }
+
     public static string? GetCodexActiveToken()
     {
         var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
@@ -28,6 +82,22 @@ public static class HostCliScanner
 
     public static string? GetClaudeActiveToken()
     {
+        // 1. Check Windows Credential Manager (Claude Code CLI storage)
+        var credTargets = new[]
+        {
+            "analytics:claude-code:access-token.com.agentharbor.app",
+            "Claude Code",
+            "claude-code",
+            "claude"
+        };
+
+        foreach (var target in credTargets)
+        {
+            var token = ReadCredentialManagerSecret(target);
+            if (!string.IsNullOrEmpty(token)) return token;
+        }
+
+        // 2. Check local configuration files
         var path1 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", "auth.json");
         var path2 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
 

@@ -1,5 +1,6 @@
 using Microsoft.CommandPalette.Extensions;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using PowerQuota.CommandPalette.Providers;
 using PowerQuota.Core.Engine;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
@@ -18,7 +19,7 @@ public class OverviewListPage : ListPage
         _configStorage = configStorage;
         _vault = vault;
         Title = "PowerQuota AI Quotas";
-        PlaceholderText = "Search AI coding quotas (Claude, Codex, Cursor, Gemini, Copilot, Minimax, Kimi)...";
+        PlaceholderText = "Search active AI quotas...";
 
         _refreshService.StateChanged += (_, _) => RaiseItemsChanged(GetItems().Length);
     }
@@ -42,19 +43,15 @@ public class OverviewListPage : ListPage
                 {
                     string statusLine = acc.GetStatusLine(config.DisplayRemainingNotUsed);
                     bool isCliActive = pState?.SystemActiveAccountId == acc.AccountId;
-                    string title = isCliActive ? $"{pid.GetLabel()} ({acc.Label}) [CLI Active]" : $"{pid.GetLabel()} ({acc.Label})";
+                    string baseLabel = accountStates.Count > 1 ? $"{pid.GetLabel()} Quota ({acc.Label})" : $"{pid.GetLabel()} Quota";
+                    string title = isCliActive ? $"{baseLabel} [CLI Active]" : baseLabel;
 
-                    string iconGlyph = acc.Health == ProviderHealth.Error ? "\uE783" :
-                                       acc.Snapshot?.HeadlineWindow?.UsedPercent > 80 ? "\uE7BA" : "\uE945";
-
-                    items.Add(new ListItem(new AnonymousCommand(() =>
-                    {
-                        // Open details page for this provider
-                    }))
+                    var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+                    items.Add(new ListItem(new CommandItem(page))
                     {
                         Title = title,
                         Subtitle = statusLine,
-                        Icon = new IconInfo(iconGlyph),
+                        Icon = ProviderIcons.GetIcon(pid),
                         Section = "Active AI Quotas",
                         MoreCommands = new IContextItem[]
                         {
@@ -73,19 +70,18 @@ public class OverviewListPage : ListPage
                     });
                 }
             }
-            else
+        }
+
+        if (!items.Any(i => i.Section == "Active AI Quotas"))
+        {
+            var addAccountPage = new AddAccountFormPage(_refreshService, _configStorage, _vault);
+            items.Add(new ListItem(new CommandItem(addAccountPage))
             {
-                items.Add(new ListItem(new AnonymousCommand(() =>
-                {
-                    _ = _refreshService.RefreshProviderAsync(pid);
-                }))
-                {
-                    Title = pid.GetLabel(),
-                    Subtitle = "No accounts configured • Click to scan local session",
-                    Icon = new IconInfo("\uE710"),
-                    Section = "Active AI Quotas"
-                });
-            }
+                Title = "No Accounts Configured",
+                Subtitle = "Select 'Add AI Account...' below to connect a provider account",
+                Icon = new IconInfo("\uE946"),
+                Section = "Active AI Quotas"
+            });
         }
 
         // Section 2: Management & Actions
@@ -100,15 +96,17 @@ public class OverviewListPage : ListPage
             Section = "Actions"
         });
 
-        items.Add(new ListItem(new AnonymousCommand(() => { }))
+        var addAccPage = new AddAccountFormPage(_refreshService, _configStorage, _vault);
+        items.Add(new ListItem(new CommandItem(addAccPage))
         {
-            Title = "Add Account...",
-            Subtitle = "Connect a new account for Claude, Codex, Cursor, Gemini, Copilot, Minimax, or Kimi",
+            Title = "Add AI Account...",
+            Subtitle = "Connect a new provider account to PowerQuota",
             Icon = new IconInfo("\uE710"),
             Section = "Actions"
         });
 
-        items.Add(new ListItem(new AnonymousCommand(() => { }))
+        var settingsPage = new SettingsFormPage(_configStorage, _refreshService);
+        items.Add(new ListItem(new CommandItem(settingsPage))
         {
             Title = "Settings",
             Subtitle = "Configure refresh intervals, quota display style, and dock bands",
