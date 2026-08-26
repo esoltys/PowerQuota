@@ -55,15 +55,25 @@ public class ProviderDetailsPage : ListPage
                     float percent = config.DisplayRemainingNotUsed ? Math.Clamp(100f - window.UsedPercent, 0f, 100f) : window.UsedPercent;
                     string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
 
-                    string resetText = string.Empty;
-                    if (window.ResetAt.HasValue)
+                    string resetFormatted = window.FormatResetText(config.ShowRelativeResetTimes);
+                    var subtitleParts = new List<string>();
+
+                    if (!string.IsNullOrEmpty(resetFormatted))
                     {
-                        var formatted = window.FormatResetText(config.ShowRelativeResetTimes);
-                        if (!string.IsNullOrEmpty(formatted))
-                        {
-                            resetText = $" • {formatted}";
-                        }
+                        subtitleParts.Add(resetFormatted);
                     }
+
+                    if (!string.IsNullOrEmpty(window.ResetDescription))
+                    {
+                        subtitleParts.Add(window.ResetDescription);
+                    }
+
+                    if (accounts.Count > 1)
+                    {
+                        subtitleParts.Add(acc.Label);
+                    }
+
+                    string subtitle = string.Join(" • ", subtitleParts);
 
                     items.Add(new ListItem(new AnonymousCommand(() =>
                     {
@@ -71,11 +81,11 @@ public class ProviderDetailsPage : ListPage
                     }))
                     {
                         Title = $"{window.Label}: {pctLabel}",
-                        Subtitle = $"{title}{resetText} • {window.ResetDescription ?? ""}",
+                        Subtitle = subtitle,
                         Icon = ProviderIcons.GetIcon(_provider),
                         MoreCommands = new IContextItem[]
                         {
-                            new CommandContextItem(new CopyTextCommand($"{window.Label}: {pctLabel}{resetText}"))
+                            new CommandContextItem(new CopyTextCommand($"{window.Label}: {pctLabel} • {subtitle}"))
                             {
                                 Title = "Copy Quota Text"
                             },
