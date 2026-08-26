@@ -62,21 +62,78 @@ public class ClaudeProvider : IProviderAdapter
         {
             ParseLimitsArray(root, windows);
         }
-        else if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("limits", out var limitsArray))
+        else if (root.ValueKind == JsonValueKind.Object)
         {
-            ParseLimitsArray(limitsArray, windows);
+            if (root.TryGetProperty("limits", out var limitsArray) && limitsArray.ValueKind == JsonValueKind.Array)
+            {
+                ParseLimitsArray(limitsArray, windows);
+            }
+
+            // Fallback to top-level five_hour and seven_day objects if limits array was empty or missing
+            if (windows.Count == 0)
+            {
+                if (root.TryGetProperty("five_hour", out var fh) && fh.ValueKind == JsonValueKind.Object)
+                {
+                    float util = 0f;
+                    if (fh.TryGetProperty("utilization", out var u) && u.ValueKind == JsonValueKind.Number)
+                    {
+                        u.TryGetSingle(out util);
+                    }
+                    DateTimeOffset? resetAt = null;
+                    if (fh.TryGetProperty("resets_at", out var ra) && ra.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(ra.GetString(), out var dt))
+                    {
+                        resetAt = dt;
+                    }
+
+                    windows.Add(new UsageWindow
+                    {
+                        Label = "Session",
+                        UsedPercent = util,
+                        ResetAt = resetAt,
+                        WindowSeconds = 5 * 3600,
+                        ResetDescription = "5-hour session window"
+                    });
+                }
+
+                if (root.TryGetProperty("seven_day", out var sd) && sd.ValueKind == JsonValueKind.Object)
+                {
+                    float util = 0f;
+                    if (sd.TryGetProperty("utilization", out var u) && u.ValueKind == JsonValueKind.Number)
+                    {
+                        u.TryGetSingle(out util);
+                    }
+                    DateTimeOffset? resetAt = null;
+                    if (sd.TryGetProperty("resets_at", out var ra) && ra.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(ra.GetString(), out var dt))
+                    {
+                        resetAt = dt;
+                    }
+
+                    windows.Add(new UsageWindow
+                    {
+                        Label = "Weekly",
+                        UsedPercent = util,
+                        ResetAt = resetAt,
+                        WindowSeconds = 7 * 24 * 3600,
+                        ResetDescription = "Weekly quota"
+                    });
+                }
+            }
         }
 
         // Extra usage / spend limits if present
         ExtraUsageState? extraUsage = null;
-        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("extra_usage", out var eu))
+        if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("extra_usage", out var eu) && eu.ValueKind == JsonValueKind.Object)
         {
-            var active = eu.TryGetProperty("is_active", out var act) && act.GetBoolean();
-            var usedPct = eu.TryGetProperty("used_percent", out var up) ? up.GetSingle() : 0f;
+            var isEnabled = eu.TryGetProperty("is_enabled", out var act) && act.ValueKind == JsonValueKind.True;
+            float usedCredits = 0f;
+            if (eu.TryGetProperty("used_credits", out var uc) && uc.ValueKind == JsonValueKind.Number)
+            {
+                uc.TryGetSingle(out usedCredits);
+            }
             extraUsage = new ExtraUsageState
             {
-                IsActive = active,
-                UsedPercent = usedPct
+                IsActive = isEnabled,
+                UsedPercent = usedCredits
             };
         }
 
@@ -101,36 +158,49 @@ public class ClaudeProvider : IProviderAdapter
         var seen = new HashSet<string>();
         foreach (var item in array.EnumerateArray())
         {
-            string? group = item.TryGetProperty("group", out var g) ? g.GetString() : null;
-            string? kind = item.TryGetProperty("kind", out var k) ? k.GetString() : null;
-            float? percent = item.TryGetProperty("percent", out var p) ? p.GetSingle() : null;
-            string? resetsAtStr = item.TryGetProperty("resets_at", out var ra) ? ra.GetString() : null;
+            if (item.ValueKind != JsonValueKind.Object) continue;
 
+            string? group = item.TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.String ? g.GetString() : null;
+            string? kind = item.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
+            
+            float percent = 0f;
+            if (item.TryGetProperty("percent", out var p) && p.ValueKind == JsonValueKind.Number)
+            {
+                p.TryGetSingle(out percent);
+            }
+
+            string? resetsAtStr = item.TryGetProperty("resets_at", out var ra) && ra.ValueKind == JsonValueKind.String ? ra.GetString() : null;
             DateTimeOffset? resetAt = null;
             if (resetsAtStr != null && DateTimeOffset.TryParse(resetsAtStr, out var parsedDt))
             {
                 resetAt = parsedDt;
             }
 
-            if (group == "session" || kind == "five_hour")
+            if (group == "session" || kind == "five_hour" || kind == "session")
             {
-                windows.Add(new UsageWindow
+                if (seen.Add("Session"))
                 {
-                    Label = "Session",
-                    UsedPercent = percent ?? 0f,
-                    ResetAt = resetAt,
-                    WindowSeconds = 5 * 3600,
-                    ResetDescription = "5-hour session window"
-                });
+                    windows.Add(new UsageWindow
+                    {
+                        Label = "Session",
+                        UsedPercent = percent,
+                        ResetAt = resetAt,
+                        WindowSeconds = 5 * 3600,
+                        ResetDescription = "5-hour session window"
+                    });
+                }
             }
-            else if (group == "weekly")
+            else if (group == "weekly" || kind?.StartsWith("seven_day") == true || kind?.StartsWith("weekly") == true)
             {
                 string label = "Weekly";
-                if (item.TryGetProperty("scope", out var scope) && scope.TryGetProperty("model", out var model))
+                if (item.TryGetProperty("scope", out var scope) && scope.ValueKind == JsonValueKind.Object)
                 {
-                    if (model.TryGetProperty("display_name", out var dn) && dn.GetString() is { } name && !string.IsNullOrEmpty(name))
+                    if (scope.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.Object)
                     {
-                        label = name;
+                        if (model.TryGetProperty("display_name", out var dn) && dn.ValueKind == JsonValueKind.String && dn.GetString() is { } name && !string.IsNullOrEmpty(name))
+                        {
+                            label = name;
+                        }
                     }
                 }
 
@@ -139,7 +209,7 @@ public class ClaudeProvider : IProviderAdapter
                     windows.Add(new UsageWindow
                     {
                         Label = label,
-                        UsedPercent = percent ?? 0f,
+                        UsedPercent = percent,
                         ResetAt = resetAt,
                         WindowSeconds = 7 * 24 * 3600,
                         ResetDescription = "Weekly quota"
@@ -149,4 +219,3 @@ public class ClaudeProvider : IProviderAdapter
         }
     }
 }
-

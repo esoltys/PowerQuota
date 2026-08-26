@@ -84,6 +84,54 @@ public class ProviderTests
     }
 
     [Fact]
+    public void ClaudeProvider_ParsesProductionResponseWithNullScope()
+    {
+        var json = """
+        {
+            "five_hour": { "utilization": 24.0, "resets_at": "2026-08-27T02:00:00.243486+00:00" },
+            "seven_day": { "utilization": 78.0, "resets_at": "2026-08-28T21:00:00.243518+00:00" },
+            "limits": [
+                {
+                    "kind": "session",
+                    "group": "session",
+                    "percent": 24,
+                    "severity": "normal",
+                    "resets_at": "2026-08-27T02:00:00.243486+00:00",
+                    "scope": null,
+                    "is_active": false
+                },
+                {
+                    "kind": "weekly_all",
+                    "group": "weekly",
+                    "percent": 78,
+                    "severity": "warning",
+                    "resets_at": "2026-08-28T21:00:00.243518+00:00",
+                    "scope": null,
+                    "is_active": true
+                }
+            ],
+            "extra_usage": {
+                "is_enabled": true,
+                "used_credits": 13814.0,
+                "currency": "CAD"
+            }
+        }
+        """;
+
+        var snapshot = ClaudeProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Claude, snapshot.Provider);
+        Assert.Equal(2, snapshot.Windows.Count);
+        Assert.Equal("Session", snapshot.Windows[0].Label);
+        Assert.Equal(24.0f, snapshot.Windows[0].UsedPercent);
+        Assert.Equal("Weekly", snapshot.Windows[1].Label);
+        Assert.Equal(78.0f, snapshot.Windows[1].UsedPercent);
+        Assert.NotNull(snapshot.ExtraUsage);
+        Assert.True(snapshot.ExtraUsage!.IsActive);
+        Assert.Equal(13814.0f, snapshot.ExtraUsage.UsedPercent);
+    }
+
+    [Fact]
     public void CursorProvider_ParsesFastAndTotalRequests()
     {
         var json = """
