@@ -239,7 +239,7 @@ public class CodexProvider : IProviderAdapter
             {
                 Email = email,
                 AccountId = accountId,
-                Plan = plan
+                Plan = FormatPlan(plan)
             }
         };
     }
@@ -299,11 +299,24 @@ public class CodexProvider : IProviderAdapter
         {
             label = FormatModelLabel(mStr);
         }
+        else if (defaultLabel == "Session" || defaultLabel == "Window" || defaultLabel == "Limit")
+        {
+            if (windowSec.HasValue)
+            {
+                if (windowSec.Value >= 2000000) label = "Monthly";
+                else if (windowSec.Value >= 500000) label = "Weekly";
+                else if (windowSec.Value >= 80000) label = "Daily";
+                else label = "Session";
+            }
+        }
 
         string? desc = null;
         if (windowSec.HasValue)
         {
-            desc = windowSec.Value <= 86400 ? $"{windowSec.Value / 3600}h window" : "Weekly window";
+            if (windowSec.Value >= 2000000) desc = "Monthly window";
+            else if (windowSec.Value >= 500000) desc = "Weekly window";
+            else if (windowSec.Value >= 80000) desc = "Daily window";
+            else if (windowSec.Value > 0) desc = $"{windowSec.Value / 3600}h window";
         }
 
         return new UsageWindow
@@ -313,6 +326,20 @@ public class CodexProvider : IProviderAdapter
             ResetAt = resetAt,
             WindowSeconds = windowSec,
             ResetDescription = desc ?? "Rate limit"
+        };
+    }
+
+    private static string FormatPlan(string? plan)
+    {
+        if (string.IsNullOrWhiteSpace(plan)) return "ChatGPT";
+        return plan.ToLowerInvariant() switch
+        {
+            "free" => "ChatGPT Free",
+            "plus" => "ChatGPT Plus",
+            "pro" => "ChatGPT Pro",
+            "team" => "ChatGPT Team",
+            "enterprise" => "ChatGPT Enterprise",
+            _ => System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(plan.Replace("_", " ").Replace("-", " "))
         };
     }
 
