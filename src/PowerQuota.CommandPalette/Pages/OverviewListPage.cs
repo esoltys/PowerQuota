@@ -99,7 +99,7 @@ public class OverviewListPage : ListPage
         var addAccPage = new AddAccountFormPage(_refreshService, _configStorage, _vault);
         items.Add(new ListItem(new CommandItem(addAccPage))
         {
-            Title = "Add AI Account...",
+            Title = "Add Account...",
             Subtitle = "Connect a new provider account to PowerQuota",
             Icon = new IconInfo("\uE710"),
             Section = "Actions"
@@ -111,6 +111,25 @@ public class OverviewListPage : ListPage
             Title = "Settings",
             Subtitle = "Configure refresh intervals, quota display style, and dock bands",
             Icon = new IconInfo("\uE713"),
+            Section = "Actions"
+        });
+
+        items.Add(new ListItem(new AnonymousCommand(() =>
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "https://github.com/esoltys/PowerQuota",
+                    UseShellExecute = true
+                });
+            }
+            catch { }
+        }))
+        {
+            Title = "GitHub Repository",
+            Subtitle = "Open github.com/esoltys/PowerQuota in browser",
+            Icon = new IconInfo("\uE8A7"),
             Section = "Actions"
         });
 

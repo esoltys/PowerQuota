@@ -164,6 +164,24 @@ public class PowerQuotaCommandProvider : CommandProvider
             Icon = new IconInfo("\uE713")
         });
 
+        commands.Add(new CommandItem(new AnonymousCommand(() =>
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "https://github.com/esoltys/PowerQuota",
+                    UseShellExecute = true
+                });
+            }
+            catch { }
+        }))
+        {
+            Title = "PowerQuota GitHub Repository",
+            Subtitle = "Open github.com/esoltys/PowerQuota in browser",
+            Icon = new IconInfo("\uE8A7")
+        });
+
         return commands.ToArray();
     }
 
