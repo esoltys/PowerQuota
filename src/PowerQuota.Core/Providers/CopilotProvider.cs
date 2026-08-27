@@ -98,10 +98,20 @@ public class CopilotProvider : IProviderAdapter
                     snapshotObj.TryGetPropertyInt32("entitlement", out var entitlement);
                     snapshotObj.TryGetPropertyInt32("remaining", out var remaining);
 
+                    // Skip inactive quota items where user has no quota/entitlement
+                    if (snapshotObj.TryGetProperty("has_quota", out var hq) && !hq.GetBoolean() && entitlement == 0 && remaining == 0)
+                    {
+                        continue;
+                    }
+
                     float usedPct = 0f;
                     if (entitlement > 0)
                     {
                         usedPct = (float)(entitlement - remaining) / entitlement * 100f;
+                    }
+                    else if (snapshotObj.TryGetPropertySingle("percent_remaining", out var pr))
+                    {
+                        usedPct = 100f - pr;
                     }
                     else if (snapshotObj.TryGetPropertySingle("used_percent", out var up))
                     {
@@ -128,7 +138,11 @@ public class CopilotProvider : IProviderAdapter
         }
 
         string? login = root.TryGetProperty("login", out var l) ? l.GetString() : null;
-        string? plan = root.TryGetProperty("access_type_sku", out var sku) ? sku.GetString() : "Copilot";
+        string? sku = root.TryGetProperty("access_type_sku", out var s) ? s.GetString() : null;
+        if (string.IsNullOrEmpty(sku) && root.TryGetProperty("copilot_plan", out var cp))
+        {
+            sku = cp.GetString();
+        }
 
         return new UsageSnapshot
         {
@@ -141,8 +155,22 @@ public class CopilotProvider : IProviderAdapter
             {
                 DisplayName = login,
                 Email = account?.Email,
-                Plan = plan
+                Plan = FormatPlan(sku)
             }
+        };
+    }
+
+    private static string FormatPlan(string? sku)
+    {
+        if (string.IsNullOrWhiteSpace(sku)) return "Copilot";
+        return sku.ToLowerInvariant() switch
+        {
+            "free_limited_copilot" => "Copilot Free",
+            "copilot_for_business" or "business" => "Copilot Business",
+            "copilot_enterprise" or "enterprise" => "Copilot Enterprise",
+            "copilot_pro" or "pro" => "Copilot Pro",
+            "copilot_individual" or "individual" => "Copilot Individual",
+            _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(sku.Replace("_", " ").Replace("-", " "))
         };
     }
 

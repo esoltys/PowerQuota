@@ -347,6 +347,7 @@ public class ProviderTests
         Assert.Equal("Completions", snapshot.Windows[1].Label);
         Assert.Equal(80.0f, snapshot.Windows[1].UsedPercent);
         Assert.Equal("monalisa", snapshot.Identity.DisplayName);
+        Assert.Equal("Copilot Business", snapshot.Identity.Plan);
     }
 
     [Fact]
@@ -390,6 +391,58 @@ public class ProviderTests
         Assert.Equal(80.0f, snapshot.Windows[2].UsedPercent, 1);
         Assert.Equal("Premium Interactions", snapshot.Windows[3].Label);
         Assert.Equal(80.0f, snapshot.Windows[3].UsedPercent, 1);
+        Assert.Equal("Copilot Enterprise", snapshot.Identity.Plan);
+    }
+
+    [Fact]
+    public void CopilotProvider_ParsesFreeLimitedCopilotAndSkipsInactiveSnapshots()
+    {
+        var json = """
+        {
+            "login": "esoltys",
+            "access_type_sku": "free_limited_copilot",
+            "quota_reset_date_utc": "2026-09-01T00:00:00Z",
+            "quota_snapshots": {
+                "chat": {
+                    "has_quota": true,
+                    "remaining": 197,
+                    "entitlement": 200,
+                    "percent_remaining": 98.5
+                },
+                "completions": {
+                    "has_quota": true,
+                    "remaining": 2000,
+                    "entitlement": 2000,
+                    "percent_remaining": 100.0
+                },
+                "premium_interactions": {
+                    "has_quota": false,
+                    "remaining": 0,
+                    "entitlement": 0,
+                    "percent_remaining": 0.0
+                }
+            }
+        }
+        """;
+
+        var snapshot = CopilotProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Copilot, snapshot.Provider);
+        Assert.Equal(2, snapshot.Windows.Count);
+        Assert.Equal("Chat", snapshot.Windows[0].Label);
+        Assert.Equal(1.5f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Equal("Completions", snapshot.Windows[1].Label);
+        Assert.Equal(0.0f, snapshot.Windows[1].UsedPercent, 1);
+        Assert.Equal("esoltys", snapshot.Identity.DisplayName);
+        Assert.Equal("Copilot Free", snapshot.Identity.Plan);
+    }
+
+    [Fact]
+    public void HostCliScanner_GetCopilotActiveToken_DetectsToken()
+    {
+        var token = HostCliScanner.GetCopilotActiveToken();
+        Assert.NotNull(token);
+        Assert.NotEmpty(token);
     }
 
     [Fact]

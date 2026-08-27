@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
@@ -217,24 +219,181 @@ public static class HostCliScanner
 
     public static string? GetCopilotActiveToken()
     {
-        var localPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "github-copilot", "hosts.json");
-        var configPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "github-copilot", "hosts.json");
+        // 1. Environment variables
+        var envVars = new[] { "COPILOT_TOKEN", "COPILOT_API_KEY", "GITHUB_COPILOT_TOKEN", "GH_TOKEN", "GITHUB_TOKEN" };
+        foreach (var env in envVars)
+        {
+            var val = Environment.GetEnvironmentVariable(env);
+            if (!string.IsNullOrWhiteSpace(val))
+                return val.Trim();
+        }
 
-        foreach (var path in new[] { localPath, configPath })
+        // 2. JSON host and application configs
+        var jsonPaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "github-copilot", "hosts.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "github-copilot", "hosts.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "github-copilot", "hosts.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "hosts.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "copilot", "hosts.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "github-copilot", "apps.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "github-copilot", "apps.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "github-copilot", "apps.json"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".copilot", "config.json")
+        };
+
+        foreach (var path in jsonPaths)
         {
             if (!File.Exists(path)) continue;
             try
             {
                 var json = File.ReadAllText(path);
                 using var doc = JsonDocument.Parse(json);
-                foreach (var prop in doc.RootElement.EnumerateObject())
+                if (doc.RootElement.ValueKind == JsonValueKind.Object)
                 {
-                    if (prop.Value.TryGetProperty("oauth_token", out var ot) && ot.GetString() is { } otStr)
-                        return otStr;
+                    foreach (var prop in doc.RootElement.EnumerateObject())
+                    {
+                        if (prop.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            if (prop.Value.TryGetProperty("oauth_token", out var ot) && ot.GetString() is { } otStr && !string.IsNullOrWhiteSpace(otStr))
+                                return otStr.Trim();
+                            if (prop.Value.TryGetProperty("token", out var t) && t.GetString() is { } tStr && !string.IsNullOrWhiteSpace(tStr))
+                                return tStr.Trim();
+                            if (prop.Value.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr && !string.IsNullOrWhiteSpace(atStr))
+                                return atStr.Trim();
+                        }
+                    }
+                    if (doc.RootElement.TryGetProperty("oauth_token", out var rootOt) && rootOt.GetString() is { } rootOtStr && !string.IsNullOrWhiteSpace(rootOtStr))
+                        return rootOtStr.Trim();
+                    if (doc.RootElement.TryGetProperty("token", out var rootT) && rootT.GetString() is { } rootTStr && !string.IsNullOrWhiteSpace(rootTStr))
+                        return rootTStr.Trim();
+                    if (doc.RootElement.TryGetProperty("access_token", out var rootAt) && rootAt.GetString() is { } rootAtStr && !string.IsNullOrWhiteSpace(rootAtStr))
+                        return rootAtStr.Trim();
                 }
             }
             catch { }
         }
+
+        // 3. GitHub CLI hosts.yml configs
+        var yamlPaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GitHub CLI", "hosts.yml"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "gh", "hosts.yml")
+        };
+
+        foreach (var path in yamlPaths)
+        {
+            if (!File.Exists(path)) continue;
+            try
+            {
+                var lines = File.ReadAllLines(path);
+                foreach (var line in lines)
+                {
+                    var trimmed = line.Trim();
+                    if (trimmed.StartsWith("oauth_token:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var parts = trimmed.Split(':', 2);
+                        if (parts.Length == 2)
+                        {
+                            var token = parts[1].Trim().Trim('"', '\'');
+                            if (!string.IsNullOrWhiteSpace(token))
+                                return token;
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 4. Copilot auth.db SQLite database
+        var dbPaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "github-copilot", "auth.db"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "github-copilot", "auth.db"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "github-copilot", "auth.db")
+        };
+
+        foreach (var dbPath in dbPaths)
+        {
+            if (!File.Exists(dbPath)) continue;
+            try
+            {
+                var connStr = new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Cache = SqliteCacheMode.Shared
+                }.ToString();
+
+                using var conn = new SqliteConnection(connStr);
+                conn.Open();
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT token_ciphertext FROM oauth_tokens ORDER BY last_used_at DESC LIMIT 1";
+                var result = cmd.ExecuteScalar();
+                if (result is byte[] blob && blob.Length > 0)
+                {
+                    try
+                    {
+                        var decrypted = ProtectedData.Unprotect(blob, null, DataProtectionScope.CurrentUser);
+                        var tok = Encoding.UTF8.GetString(decrypted).Trim();
+                        if (!string.IsNullOrWhiteSpace(tok))
+                            return tok;
+                    }
+                    catch
+                    {
+                        var tok = Encoding.UTF8.GetString(blob).Trim();
+                        if (!string.IsNullOrWhiteSpace(tok))
+                            return tok;
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 5. Windows Credential Manager targets
+        var credTargets = new[]
+        {
+            "git:https://github.com",
+            "gh:github.com",
+            "vscodevscode.github-authentication/github.auth",
+            "vscode-github.login/account",
+            "GitHub - https://api.github.com",
+            "github-copilot",
+            "Copilot",
+            "github.com"
+        };
+
+        foreach (var target in credTargets)
+        {
+            var token = ReadCredentialManagerSecret(target);
+            if (!string.IsNullOrWhiteSpace(token))
+                return token;
+        }
+
+        // 6. gh auth token fallback
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "gh",
+                Arguments = "auth token",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            using var proc = Process.Start(psi);
+            if (proc != null)
+            {
+                var stdout = proc.StandardOutput.ReadToEnd().Trim();
+                proc.WaitForExit();
+                if (!string.IsNullOrWhiteSpace(stdout) && (stdout.StartsWith("gh", StringComparison.OrdinalIgnoreCase) || stdout.Length >= 20))
+                    return stdout;
+            }
+        }
+        catch { }
+
         return null;
     }
 
