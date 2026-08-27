@@ -26,5 +26,10 @@ BundleArtifacts/
 Package.StoreAssociation.xml
 _pkginfo.txt
 
-# Publish output
-publish/
+# Publish & MSIX build artifacts
+[Pp]ublish/
+[Aa]rtifacts/
+bundle_mapping.txt
+*.pfx
+*.cer
+

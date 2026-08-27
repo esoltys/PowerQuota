@@ -6,8 +6,7 @@
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Platforms>x64</Platforms>
-    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64;ARM64</Platforms>
     <RootNamespace>PowerQuota.CommandPalette</RootNamespace>
     <AssemblyName>PowerQuota.CommandPalette</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>

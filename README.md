@@ -140,6 +140,35 @@ Open **PowerToys Settings** -> **Command Palette**:
 
 ---
 
+### Building the MSIX Package
+
+PowerQuota includes an automated MSIX packaging script ([build-msix.ps1](file:///c:/Users/ericj/source/PowerQuota/build-msix.ps1)) that builds, packages, and signs standalone installer packages.
+
+#### 1. Build and Sign for Local Sideloading
+Creates a signed `.msix` in `artifacts/` using a local self-signed developer certificate:
+```powershell
+.\build-msix.ps1
+```
+To build and install/update immediately on your machine:
+```powershell
+.\build-msix.ps1 -Install
+```
+
+#### 2. Build for Microsoft Store Submission
+Generates an unsigned `.msix` package ready for direct upload to Microsoft Partner Center:
+```powershell
+.\build-msix.ps1 -ForStore -Version "1.0.0.0"
+```
+You can also specify your Partner Center reserved identity parameters:
+```powershell
+.\build-msix.ps1 -ForStore -Version "1.0.0.0" `
+    -PackageIdentityName "YourPublisher.PowerQuota" `
+    -Publisher "CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" `
+    -PublisherDisplayName "Your Publisher Name"
+```
+
+---
+
 ## Local Development & Fast Iteration
 
 When developing or modifying PowerQuota locally, you can quickly iterate without reinstalling the entire package:
