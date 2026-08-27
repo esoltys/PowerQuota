@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
+using PowerQuota.Core.Utilities;
 
 namespace PowerQuota.Core.Providers;
 
@@ -51,9 +52,9 @@ public class MinimaxProvider : IProviderAdapter
             {
                 string modelName = item.TryGetProperty("model_name", out var mn) ? mn.GetString() ?? "general" : "general";
 
-                if (item.TryGetProperty("current_interval_remaining_percent", out var remPct))
+                if (item.TryGetPropertySingle("current_interval_remaining_percent", out var remPct))
                 {
-                    float used = 100f - remPct.GetSingle();
+                    float used = 100f - remPct;
                     windows.Add(new UsageWindow
                     {
                         Label = $"{modelName} (5h)",
@@ -63,9 +64,9 @@ public class MinimaxProvider : IProviderAdapter
                     });
                 }
 
-                if (item.TryGetProperty("current_weekly_remaining_percent", out var wkPct))
+                if (item.TryGetPropertySingle("current_weekly_remaining_percent", out var wkPct))
                 {
-                    float used = 100f - wkPct.GetSingle();
+                    float used = 100f - wkPct;
                     windows.Add(new UsageWindow
                     {
                         Label = $"{modelName} (Weekly)",
