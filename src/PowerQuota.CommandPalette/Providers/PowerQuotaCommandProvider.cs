@@ -95,8 +95,8 @@ public class PowerQuotaCommandProvider : CommandProvider
                         string subtitle = string.Join(" • ", subtitleParts);
 
                         string itemTitle = config.DockDisplayMode == DockDisplayMode.Bars
-                            ? $"{pid.GetLabel()} {window.Label}: {GetProgressBar(percent, 8)}"
-                            : $"{pid.GetLabel()} {window.Label}: {pctLabel}";
+                            ? GetProgressBar(percent, 8)
+                            : $"{window.Label}: {pctLabel}";
 
                         commands.Add(new CommandItem(page)
                         {
