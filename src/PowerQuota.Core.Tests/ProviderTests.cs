@@ -134,8 +134,8 @@ public class ProviderTests
     [Fact]
     public void UsageWindow_FormatResetTime_FormatsDaysAndHoursAccurately()
     {
-        // 1. Multi-day reset (e.g. 45 hours away)
-        var futureReset = DateTimeOffset.UtcNow.AddHours(45.5);
+        // 1. Multi-day reset (4 days away -> e.g. "Resets Friday at 2:00 PM")
+        var futureReset = DateTimeOffset.UtcNow.AddDays(4);
         var text = UsageWindow.FormatResetTime(futureReset);
         var expectedDay = futureReset.ToLocalTime().ToString("dddd");
         Assert.StartsWith("Resets ", text);
