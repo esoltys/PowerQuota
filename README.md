@@ -2,15 +2,15 @@
 
 A Windows-native extension for **PowerToys Command Palette** and the **PowerToys Dock** that tracks AI coding quotas for **Claude Code**, **Codex / ChatGPT**, **Cursor**, **Gemini Code Assist**, **GitHub Copilot**, **Minimax**, and **Kimi for Coding**.
 
-Converted from the open-source COSMIC panel applet [TopiCsarno/yapcap](https://github.com/TopiCsarno/yapcap) into a native C# / .NET 9 experience for Windows power users.
+([You didn't know PowerToys has a Command Palette Dock now?](https://learn.microsoft.com/en-us/windows/powertoys/command-palette/dock))
 
 ---
 
 ## Screenshots
 
-| Overview & Quotas | Provider Quota Details |
+| Command Palette | Overview & Quotas |
 |:---:|:---:|
-| ![PowerQuota Overview](docs/overview.png) | ![Provider Details](docs/command-palette.png) |
+| ![Provider Details](docs/command-palette.png) | ![PowerQuota Overview](docs/overview.png) |
 
 | PowerToys Dock Integration | Live Reset Tooltips |
 |:---:|:---:|
