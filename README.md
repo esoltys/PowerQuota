@@ -63,12 +63,6 @@ PowerQuota is designed from the ground up to respect developer privacy and prote
 PowerQuota/
 ├── PowerQuota.sln
 ├── docs/                               # Documentation screenshots
-│   ├── overview.png
-│   ├── command-palette.png
-│   ├── dock-01.png
-│   ├── dock-02.png
-│   ├── settings.png
-│   └── add-provider.png
 ├── src/
 │   ├── PowerQuota.Core/                # AI quota engine, provider adapters, DPAPI vault, CLI scanner
 │   │   ├── Engine/                     # QuotaRefreshService with exponential rate-limit backoff
