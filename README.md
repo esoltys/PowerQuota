@@ -8,6 +8,8 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
 
 ## Screenshots
 
+![Add to Dock](./docs/dock-03.png)
+
 | Command Palette | Overview & Quotas |
 |:---:|:---:|
 | ![Provider Details](docs/command-palette.png) | ![PowerQuota Overview](docs/overview.png) |
