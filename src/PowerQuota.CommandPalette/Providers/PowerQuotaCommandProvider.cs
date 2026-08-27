@@ -49,33 +49,94 @@ public class PowerQuotaCommandProvider : CommandProvider
             Icon = ProviderIcons.GetIcon()
         });
 
-        // 2. Individual provider items for quick access (only if accounts exist)
+        // 2. Individual provider items and quota window cards for quick access and Dock pinning
         foreach (var pid in ProviderIdExtensions.All)
         {
             if (!config.EnabledProviders.Contains(pid)) continue;
 
-            var acc = _refreshService.State.ProviderAccounts.FirstOrDefault(a => a.Provider == pid);
-            if (acc == null && !config.Accounts.Any(a => a.Provider == pid)) continue;
-
-            string statusLine = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
+            var accounts = _refreshService.State.ProviderAccounts.Where(a => a.Provider == pid).ToList();
+            if (accounts.Count == 0 && !config.Accounts.Any(a => a.Provider == pid)) continue;
 
             var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
-            commands.Add(new CommandItem(page)
+
+            foreach (var acc in accounts)
             {
-                Title = $"{pid.GetLabel()} Quota",
-                Subtitle = statusLine,
-                Icon = ProviderIcons.GetIcon(pid),
-                MoreCommands = new IContextItem[]
+                if (acc.Snapshot is { } snapshot && snapshot.Windows.Count > 0)
                 {
-                    new CommandContextItem(new AnonymousCommand(() =>
+                    foreach (var window in snapshot.Windows)
                     {
-                        _ = _refreshService.RefreshProviderAsync(pid);
-                    }))
-                    {
-                        Title = "Refresh Quota"
+                        float percent = config.DisplayRemainingNotUsed ? Math.Clamp(100f - window.UsedPercent, 0f, 100f) : window.UsedPercent;
+                        string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
+
+                        string resetFormatted = window.FormatResetText(config.ShowRelativeResetTimes);
+                        string resetPhrase;
+                        if (string.IsNullOrEmpty(resetFormatted))
+                        {
+                            resetPhrase = window.Label;
+                        }
+                        else if (resetFormatted.StartsWith("Resets ", StringComparison.OrdinalIgnoreCase))
+                        {
+                            resetPhrase = $"{window.Label} resets {resetFormatted.Substring(7)}";
+                        }
+                        else
+                        {
+                            resetPhrase = $"{window.Label} {resetFormatted.ToLowerInvariant()}";
+                        }
+
+                        var subtitleParts = new List<string> { resetPhrase };
+                        if (!string.IsNullOrEmpty(window.ResetDescription))
+                        {
+                            subtitleParts.Add(window.ResetDescription);
+                        }
+                        if (accounts.Count > 1)
+                        {
+                            subtitleParts.Add(acc.Label);
+                        }
+                        string subtitle = string.Join(" • ", subtitleParts);
+
+                        string itemTitle = config.DockDisplayMode == DockDisplayMode.Bars
+                            ? $"{pid.GetLabel()} {window.Label}: {GetProgressBar(percent, 8)}"
+                            : $"{pid.GetLabel()} {window.Label}: {pctLabel}";
+
+                        commands.Add(new CommandItem(page)
+                        {
+                            Title = itemTitle,
+                            Subtitle = subtitle,
+                            Icon = ProviderIcons.GetIcon(pid),
+                            MoreCommands = new IContextItem[]
+                            {
+                                new CommandContextItem(new AnonymousCommand(() =>
+                                {
+                                    _ = _refreshService.RefreshProviderAsync(pid);
+                                }))
+                                {
+                                    Title = "Refresh Quota"
+                                }
+                            }
+                        });
                     }
                 }
-            });
+                else
+                {
+                    string statusLine = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
+                    commands.Add(new CommandItem(page)
+                    {
+                        Title = $"{pid.GetLabel()} Quota",
+                        Subtitle = statusLine,
+                        Icon = ProviderIcons.GetIcon(pid),
+                        MoreCommands = new IContextItem[]
+                        {
+                            new CommandContextItem(new AnonymousCommand(() =>
+                            {
+                                _ = _refreshService.RefreshProviderAsync(pid);
+                            }))
+                            {
+                                Title = "Refresh Quota"
+                            }
+                        }
+                    });
+                }
+            }
         }
 
         // 3. Quick Action Commands
