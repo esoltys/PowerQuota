@@ -39,7 +39,7 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
   - Dynamic display modes: **Percentage** (`76% left`, `22% left`) or **Usage Bars** (`▰▰▰▰▰▰▱▱`).
   - Locale-aware reset countdowns and schedules (e.g., `Resets in 1h 52m` or `Resets Friday at 2:00 PM`).
 - **Command Palette Experience**
-  - **Overview List**: Dashboard of all configured AI providers accessible with `Win + Shift + Space`.
+  - **Overview List**: Dashboard of all configured AI providers accessible with `Win + Alt + Space`.
   - **Provider Details**: Drill down into session, weekly, extra spend, and credit balances.
   - **Settings Form**: Dedicated choice pages to toggle display styles, remaining vs used %, relative vs absolute clock times, and background polling intervals.
 - **Privacy First & Local DPAPI Security**
@@ -135,7 +135,7 @@ Get-AppxPackage *PowerQuota*
 
 Open **PowerToys Settings** -> **Command Palette**:
 - Enable **Command Palette** and **Enable Dock**.
-- Press `Win + Shift + Space` (or configured shortcut) and type `powerquota` to view your AI quotas.
+- Press `Win + Alt + Space` (or configured shortcut) and type `powerquota` to view your AI quotas.
 - Pinned dock bands will appear in your persistent PowerToys Dock bar with real-time percentages or usage bars!
 
 ---
@@ -174,7 +174,7 @@ You can also specify your Partner Center reserved identity parameters:
 When developing or modifying PowerQuota locally, you can quickly iterate without reinstalling the entire package:
 
 ### 1. Enable External Reload in Command Palette
-1. Open **Command Palette Settings** (`Win + Shift + Space` then press `Ctrl + ,`).
+1. Open **Command Palette Settings** (`Win + Alt + Space` then press `Ctrl + ,`).
 2. Navigate to **Extensions** -> **Installed** (or scroll to the developer options).
 3. Toggle **Enable external reload** to **On**.
 
