@@ -44,7 +44,7 @@ public class ProviderTests
         Assert.NotNull(snapshot.ProviderCost);
         Assert.Equal(150.0, snapshot.ProviderCost!.Used);
         Assert.Equal("dev@example.com", snapshot.Identity.Email);
-        Assert.Equal("plus", snapshot.Identity.Plan);
+        Assert.Equal("ChatGPT Plus", snapshot.Identity.Plan);
     }
 
     [Fact]
@@ -81,7 +81,7 @@ public class ProviderTests
         Assert.Contains(snapshot.Windows, w => w.Label == "GPT-4o" && Math.Abs(w.UsedPercent - 15.5f) < 0.01f);
         Assert.Contains(snapshot.Windows, w => w.Label == "o1" && Math.Abs(w.UsedPercent - 60f) < 0.01f);
         Assert.Contains(snapshot.Windows, w => w.Label == "o3-mini" && Math.Abs(w.UsedPercent - 10f) < 0.01f);
-        Assert.Equal("team", snapshot.Identity.Plan);
+        Assert.Equal("ChatGPT Team", snapshot.Identity.Plan);
     }
 
     [Fact]
@@ -435,6 +435,38 @@ public class ProviderTests
         Assert.Equal(0.0f, snapshot.Windows[1].UsedPercent, 1);
         Assert.Equal("esoltys", snapshot.Identity.DisplayName);
         Assert.Equal("Copilot Free", snapshot.Identity.Plan);
+    }
+
+    [Fact]
+    public void CodexProvider_ParsesFreeTierMonthlyWindowCorrectly()
+    {
+        var json = """
+        {
+            "user_id": "user-123",
+            "email": "user@example.com",
+            "plan_type": "free",
+            "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                    "used_percent": 0,
+                    "limit_window_seconds": 2592000,
+                    "reset_after_seconds": 2592000,
+                    "reset_at": 1790467108
+                },
+                "secondary_window": null
+            }
+        }
+        """;
+
+        var snapshot = CodexProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Codex, snapshot.Provider);
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Monthly", snapshot.Windows[0].Label);
+        Assert.Equal("Monthly window", snapshot.Windows[0].ResetDescription);
+        Assert.Equal(0.0f, snapshot.Windows[0].UsedPercent);
+        Assert.Equal("ChatGPT Free", snapshot.Identity.Plan);
     }
 
     [Fact]
