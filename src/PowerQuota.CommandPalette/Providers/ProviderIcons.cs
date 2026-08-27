@@ -20,7 +20,7 @@ public static class ProviderIcons
             ProviderId.Codex => "codex",
             ProviderId.Cursor => "cursor",
             ProviderId.Gemini => "gemini",
-            ProviderId.Copilot => "copilot",
+            ProviderId.Copilot => "githubcopilot",
             ProviderId.Minimax => "minimax",
             ProviderId.Kimi => "kimi",
             _ => "powerquota"
