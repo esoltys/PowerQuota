@@ -111,13 +111,15 @@ PowerQuota/
 
 ### Publishing and Registering with PowerToys
 
-1. Publish the Command Palette extension:
+1. Close any running instances and publish the extension:
    ```powershell
+   Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
    dotnet publish src/PowerQuota.CommandPalette/PowerQuota.CommandPalette.csproj -c Release -r win-x64 --self-contained false
    ```
 
 2. Register the extension manifest with Windows:
    ```powershell
+   Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
    Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
    ```
 
