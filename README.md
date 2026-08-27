@@ -111,28 +111,30 @@ PowerQuota/
 
 ### Publishing and Registering with PowerToys
 
-1. Close any running instances and publish the extension:
-   ```powershell
-   Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
-   dotnet publish src/PowerQuota.CommandPalette/PowerQuota.CommandPalette.csproj -c Release -r win-x64 --self-contained false
-   ```
+You can use the included `register.ps1` script to build, stop running processes, register the AppX package, and hot-reload in one step:
 
-2. Register the extension manifest with Windows:
-   ```powershell
-   Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
-   Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
-   ```
+```powershell
+.\register.ps1
+```
 
-3. Confirm registration:
-   ```powershell
-   Get-AppxPackage *PowerQuota*
-   ```
-   *Verify that `Status` reports `Ok`.*
+Or manually:
+```powershell
+Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
+dotnet publish src/PowerQuota.CommandPalette/PowerQuota.CommandPalette.csproj -c Release -r win-x64 --self-contained false
+Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
+Start-Process "x-cmdpal://reload"
+```
 
-4. Open **PowerToys Settings** -> **Command Palette**:
-   - Enable **Command Palette** and **Enable Dock**.
-   - Press `Win + Shift + Space` (or configured shortcut) and type `powerquota` to view your AI quotas.
-   - Pinned dock bands will appear in your persistent PowerToys Dock bar with real-time percentages or usage bars!
+Verify registration:
+```powershell
+Get-AppxPackage *PowerQuota*
+```
+*Verify that `Status` reports `Ok`.*
+
+Open **PowerToys Settings** -> **Command Palette**:
+- Enable **Command Palette** and **Enable Dock**.
+- Press `Win + Shift + Space` (or configured shortcut) and type `powerquota` to view your AI quotas.
+- Pinned dock bands will appear in your persistent PowerToys Dock bar with real-time percentages or usage bars!
 
 ---
 
@@ -146,13 +148,13 @@ When developing or modifying PowerQuota locally, you can quickly iterate without
 3. Toggle **Enable external reload** to **On**.
 
 ### 2. Fast Build & Reload Script
-Whenever you make C# or UI changes, run this one-liner in PowerShell to rebuild and instantly hot-reload Command Palette:
+Whenever you make code or UI changes, simply run:
 
 ```powershell
-Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
-dotnet publish src/PowerQuota.CommandPalette/PowerQuota.CommandPalette.csproj -c Release -r win-x64 --self-contained false
-Start-Process "x-cmdpal://reload"
+.\reload.ps1
 ```
+
+*(This stops running extension processes, compiles Release, and sends the `x-cmdpal://reload` signal).*
 
 ### 3. Diagnostic Logs & Data Files
 - **Live Extension Logs**:
