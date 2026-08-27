@@ -48,6 +48,69 @@ public class ProviderTests
     }
 
     [Fact]
+    public void CodexProvider_ParsesMultiModelAndArrayLimitsResiliently()
+    {
+        var json = """
+        {
+            "account_id": "org-multi456",
+            "email": "user@openai.com",
+            "plan_type": "team",
+            "rate_limit": {
+                "gpt_4o": {
+                    "used_percent": "15.5",
+                    "reset_at": "1780100000",
+                    "limit_window_seconds": "18000"
+                },
+                "o1": {
+                    "used_percent": 60,
+                    "reset_at": 1780200000,
+                    "limit_window_seconds": 604800
+                },
+                "o3_mini": {
+                    "used_percent": 10.0,
+                    "reset_at": 1780300000
+                }
+            }
+        }
+        """;
+
+        var snapshot = CodexProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Codex, snapshot.Provider);
+        Assert.Equal(3, snapshot.Windows.Count);
+        Assert.Contains(snapshot.Windows, w => w.Label == "GPT-4o" && Math.Abs(w.UsedPercent - 15.5f) < 0.01f);
+        Assert.Contains(snapshot.Windows, w => w.Label == "o1" && Math.Abs(w.UsedPercent - 60f) < 0.01f);
+        Assert.Contains(snapshot.Windows, w => w.Label == "o3-mini" && Math.Abs(w.UsedPercent - 10f) < 0.01f);
+        Assert.Equal("team", snapshot.Identity.Plan);
+    }
+
+    [Fact]
+    public void CodexProvider_HandlesMissingAndPartialFieldsGracefully()
+    {
+        var json = """
+        {
+            "rate_limit": {
+                "windows": [
+                    {
+                        "name": "Custom Model Pool",
+                        "utilization": "42.5",
+                        "resets_at": "2026-08-28T12:00:00Z"
+                    }
+                ]
+            }
+        }
+        """;
+
+        var snapshot = CodexProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Codex, snapshot.Provider);
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Custom Model Pool", snapshot.Windows[0].Label);
+        Assert.Equal(42.5f, snapshot.Windows[0].UsedPercent);
+        Assert.NotNull(snapshot.Windows[0].ResetAt);
+    }
+
+    [Fact]
     public void ClaudeProvider_ParsesScopedWeeklyLimits()
     {
         var json = """

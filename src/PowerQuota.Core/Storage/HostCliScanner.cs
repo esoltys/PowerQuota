@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Data.Sqlite;
+using PowerQuota.Core.Utilities;
 
 namespace PowerQuota.Core.Storage;
 
@@ -59,10 +60,10 @@ public static class HostCliScanner
         return null;
     }
 
-    public static string? GetCodexActiveToken()
+    public static (string? AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt) ScanCodexTokens()
     {
         var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex", "auth.json");
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path)) return (null, null, null);
 
         try
         {
@@ -70,15 +71,30 @@ public static class HostCliScanner
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.TryGetProperty("tokens", out var tokens))
             {
-                if (tokens.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
+                string? at = tokens.TryGetProperty("access_token", out var atProp) ? atProp.GetString() : null;
+                string? rt = tokens.TryGetProperty("refresh_token", out var rtProp) ? rtProp.GetString() : null;
+                DateTimeOffset? exp = null;
+
+                if (tokens.TryGetProperty("expires_at", out var expProp))
                 {
-                    return atStr;
+                    if (expProp.TryGetInt64Value(out var expEpoch) && expEpoch > 0)
+                    {
+                        exp = DateTimeOffset.FromUnixTimeSeconds(expEpoch);
+                    }
+                    else if (DateTimeOffset.TryParse(expProp.GetString(), out var parsedExp))
+                    {
+                        exp = parsedExp;
+                    }
                 }
+
+                return (at, rt, exp);
             }
         }
         catch { }
-        return null;
+        return (null, null, null);
     }
+
+    public static string? GetCodexActiveToken() => ScanCodexTokens().AccessToken;
 
     public static string? GetClaudeActiveToken()
     {
