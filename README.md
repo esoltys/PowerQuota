@@ -4,8 +4,6 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
 
 ([You didn't know PowerToys has a Command Palette Dock now?](https://learn.microsoft.com/en-us/windows/powertoys/command-palette/dock))
 
-[<img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>](https://apps.microsoft.com/detail/9NP7BBL8695W)
-
 ⭐ **[Issues](https://github.com/esoltys/PowerQuota/issues)** - file a bug report or a feature request
 
 ---
