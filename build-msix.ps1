@@ -54,23 +54,40 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     }
 }
 
+function Get-ConfigEnvVar([string]$name) {
+    $val = [System.Environment]::GetEnvironmentVariable($name, "Process")
+    if ([string]::IsNullOrWhiteSpace($val)) {
+        $val = [System.Environment]::GetEnvironmentVariable($name, "User")
+    }
+    if ([string]::IsNullOrWhiteSpace($val)) {
+        $val = [System.Environment]::GetEnvironmentVariable($name, "Machine")
+    }
+    return $val
+}
+
 # Resolve PackageIdentityName from environment variable if not specified
-if ([string]::IsNullOrWhiteSpace($PackageIdentityName) -and -not [string]::IsNullOrWhiteSpace($env:PackageIdentityName)) {
-    $PackageIdentityName = "$($env:PackageIdentityName).PowerQuota"
+if ([string]::IsNullOrWhiteSpace($PackageIdentityName)) {
+    $envPkg = Get-ConfigEnvVar "PackageIdentityName"
+    if (-not [string]::IsNullOrWhiteSpace($envPkg)) {
+        $PackageIdentityName = "$envPkg.PowerQuota"
+    }
 }
 
 # Resolve Publisher from environment variable if not specified
-if ([string]::IsNullOrWhiteSpace($Publisher) -and -not [string]::IsNullOrWhiteSpace($env:PackageIdentityPublisher)) {
-    if ($env:PackageIdentityPublisher.StartsWith("CN=", [System.StringComparison]::OrdinalIgnoreCase)) {
-        $Publisher = $env:PackageIdentityPublisher
-    } else {
-        $Publisher = "CN=$($env:PackageIdentityPublisher)"
+if ([string]::IsNullOrWhiteSpace($Publisher)) {
+    $envPub = Get-ConfigEnvVar "PackageIdentityPublisher"
+    if (-not [string]::IsNullOrWhiteSpace($envPub)) {
+        if ($envPub.StartsWith("CN=", [System.StringComparison]::OrdinalIgnoreCase)) {
+            $Publisher = $envPub
+        } else {
+            $Publisher = "CN=$envPub"
+        }
     }
 }
 
 # Resolve PublisherDisplayName from environment variable if not specified
-if ([string]::IsNullOrWhiteSpace($PublisherDisplayName) -and -not [string]::IsNullOrWhiteSpace($env:PublisherDisplayName)) {
-    $PublisherDisplayName = $env:PublisherDisplayName
+if ([string]::IsNullOrWhiteSpace($PublisherDisplayName)) {
+    $PublisherDisplayName = Get-ConfigEnvVar "PublisherDisplayName"
 }
 
 Write-Step "Checking build environment and prerequisites..."
