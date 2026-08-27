@@ -88,7 +88,7 @@ PowerQuota/
 
 ### Prerequisites
 - Windows 10 (Build 19041+) or Windows 11
-- [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [PowerToys](https://github.com/microsoft/PowerToys) (with Command Palette enabled)
 - **Windows Developer Mode**: Must be enabled (**Settings** → **System** → **Advanced** → **Developer Mode**, or **System** → **For developers**) or run registration with Administrator privileges to install unpacked development packages.
 
@@ -118,7 +118,7 @@ PowerQuota/
 
 2. Register the extension manifest with Windows:
    ```powershell
-   Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net9.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
+   Add-AppxPackage -Register "src\PowerQuota.CommandPalette\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
    ```
 
 3. Confirm registration:
