@@ -168,6 +168,59 @@ public class ProviderTests
         Assert.Equal("Fast / Composer", snapshot.Windows[0].Label);
         Assert.Equal(25.0f, snapshot.Windows[0].UsedPercent);
         Assert.NotNull(snapshot.Windows[0].ResetAt);
+        Assert.Equal("125 / 500 requests (375 left)", snapshot.Windows[0].ResetDescription);
+    }
+
+    [Fact]
+    public void CursorProvider_ParsesMultiModelPoolsAndUsageSpend()
+    {
+        var json = """
+        {
+            "gpt4": {
+                "numRequests": 50,
+                "maxRequestUsage": 500
+            },
+            "composer": {
+                "numRequests": 100,
+                "maxRequestUsage": 200
+            },
+            "custom_models": {
+                "claude-3-7-sonnet": {
+                    "numRequests": 30,
+                    "maxRequestUsage": 100
+                }
+            },
+            "usage_based_spend": {
+                "spend": 14.50,
+                "limit": 50.00,
+                "currency": "USD"
+            },
+            "startOfMonth": "2026-08-01T00:00:00Z",
+            "membershipType": "Business"
+        }
+        """;
+
+        var snapshot = CursorProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Cursor, snapshot.Provider);
+        Assert.Equal(3, snapshot.Windows.Count);
+        Assert.Equal("Fast / Composer", snapshot.Windows[0].Label);
+        Assert.Equal(10.0f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Equal("Composer", snapshot.Windows[1].Label);
+        Assert.Equal(50.0f, snapshot.Windows[1].UsedPercent, 1);
+        Assert.Equal("Claude 3.7 Sonnet", snapshot.Windows[2].Label);
+        Assert.Equal(30.0f, snapshot.Windows[2].UsedPercent, 1);
+
+        Assert.NotNull(snapshot.ProviderCost);
+        Assert.Equal(14.50, snapshot.ProviderCost!.Used);
+        Assert.Equal(50.00, snapshot.ProviderCost.Limit);
+        Assert.Equal("USD", snapshot.ProviderCost.Units);
+
+        Assert.NotNull(snapshot.ExtraUsage);
+        Assert.True(snapshot.ExtraUsage!.IsActive);
+        Assert.Equal(29.0f, snapshot.ExtraUsage.UsedPercent, 1);
+
+        Assert.Equal("Business", snapshot.Identity.Plan);
     }
 
     [Fact]
