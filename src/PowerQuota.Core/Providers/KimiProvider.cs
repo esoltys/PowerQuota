@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
+using PowerQuota.Core.Utilities;
 
 namespace PowerQuota.Core.Providers;
 
@@ -54,10 +55,9 @@ public class KimiProvider : IProviderAdapter
 
         if (root.TryGetProperty("usage", out var usage))
         {
-            if (usage.TryGetProperty("limit", out var limProp) &&
-                double.TryParse(limProp.GetString(), out var limit) && limit > 0)
+            if (usage.TryGetPropertyDouble("limit", out var limit) && limit > 0)
             {
-                double used = usage.TryGetProperty("used", out var u) && double.TryParse(u.GetString(), out var uVal) ? uVal : 0;
+                usage.TryGetPropertyDouble("used", out var used);
                 float usedPct = (float)(used / limit * 100.0);
 
                 DateTimeOffset? resetAt = null;
@@ -81,13 +81,12 @@ public class KimiProvider : IProviderAdapter
             foreach (var lim in limits.EnumerateArray())
             {
                 if (lim.TryGetProperty("detail", out var detail) &&
-                    detail.TryGetProperty("limit", out var lProp) &&
-                    double.TryParse(lProp.GetString(), out var limit) && limit > 0)
+                    detail.TryGetPropertyDouble("limit", out var limit) && limit > 0)
                 {
-                    double used = detail.TryGetProperty("used", out var u) && double.TryParse(u.GetString(), out var uVal) ? uVal : 0;
+                    detail.TryGetPropertyDouble("used", out var used);
                     float usedPct = (float)(used / limit * 100.0);
 
-                    long durationMin = lim.TryGetProperty("window", out var win) && win.TryGetProperty("duration", out var dur) ? dur.GetInt64() : 300;
+                    long durationMin = lim.TryGetProperty("window", out var win) && win.TryGetPropertyInt64("duration", out var dur) ? dur : 300;
 
                     windows.Add(new UsageWindow
                     {
