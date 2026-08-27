@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PowerQuota.Core\PowerQuota.Core.csproj" />
+    <ProjectReference Include="..\PowerQuota.CommandPalette\PowerQuota.CommandPalette.csproj" />
   </ItemGroup>
 
 </Project>

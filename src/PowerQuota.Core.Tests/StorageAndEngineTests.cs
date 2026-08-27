@@ -39,6 +39,75 @@ public class StorageAndEngineTests
     }
 
     [Fact]
+    public void PowerQuotaCommandProvider_TopLevelCommands_And_DockBands_HaveStableIds()
+    {
+        var storage = new ConfigStorage();
+        storage.Current.Accounts.Add(new AccountConfig
+        {
+            Id = "acc-claude-test",
+            Provider = ProviderId.Claude,
+            Label = "Claude Pro"
+        });
+
+        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault());
+        
+        var topCommands = provider.TopLevelCommands();
+        Assert.NotEmpty(topCommands);
+        foreach (var cmd in topCommands)
+        {
+            Assert.NotNull(cmd.Command);
+            Assert.False(string.IsNullOrWhiteSpace(cmd.Command.Id), $"Top level command '{cmd.Title}' is missing Command.Id");
+        }
+
+        var dockBands = provider.GetDockBands();
+        Assert.NotEmpty(dockBands);
+        foreach (var band in dockBands)
+        {
+            Assert.NotNull(band.Command);
+            Assert.False(string.IsNullOrWhiteSpace(band.Command.Id), $"Dock band '{band.Title}' is missing Command.Id");
+            Assert.StartsWith("dock-", band.Command.Id);
+        }
+    }
+
+    [Fact]
+    public void PowerQuotaCommandProvider_GetCommandItem_ResolvesByExactId_Prefix_And_Title()
+    {
+        var storage = new ConfigStorage();
+        storage.Current.Accounts.Add(new AccountConfig
+        {
+            Id = "acc-claude-test",
+            Provider = ProviderId.Claude,
+            Label = "Claude Pro"
+        });
+
+        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault());
+        
+        // Exact Id match on top-level overview
+        var overviewItem = provider.GetCommandItem("powerquota-overview");
+        Assert.NotNull(overviewItem);
+        Assert.Equal("PowerQuota", overviewItem!.Title);
+
+        // Host-prefixed Id match on action command
+        var prefixedItem = provider.GetCommandItem("39231EricJamesSoltys.PowerQuota_3cwpgnyg4f1v8!App!action-refresh-all");
+        Assert.NotNull(prefixedItem);
+        Assert.Equal("Refresh All Quotas", prefixedItem!.Title);
+
+        // Dock item match
+        var dockItem = provider.GetCommandItem("dock-Claude-acc-claude-test-status");
+        Assert.NotNull(dockItem);
+        Assert.Equal("dock-Claude-acc-claude-test-status", dockItem!.Command?.Id);
+
+        // Fallback by title
+        var byTitleItem = provider.GetCommandItem("Refresh All Quotas");
+        Assert.NotNull(byTitleItem);
+
+        // GetCommand resolution
+        var cmd = provider.GetCommand("action-settings");
+        Assert.NotNull(cmd);
+        Assert.Equal("action-settings", cmd!.Id);
+    }
+
+    [Fact]
     public void ConfigStorage_LoadsAndSavesSettings()
     {
         var storage = new ConfigStorage();
