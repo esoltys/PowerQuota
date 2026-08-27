@@ -298,5 +298,72 @@ public class ProviderTests
         Assert.Equal(20.0f, snapshot.Windows[1].UsedPercent);
         Assert.Equal("Pro", snapshot.Identity.Plan);
     }
+
+    [Fact]
+    public void KimiProvider_ParsesNumericLimitValuesCorrectly()
+    {
+        var json = """
+        {
+            "usage": {
+                "limit": 200,
+                "used": 50,
+                "resetTime": "2026-08-30T00:00:00Z"
+            },
+            "limits": [
+                {
+                    "window": { "duration": 120 },
+                    "detail": {
+                        "limit": 80,
+                        "used": 20
+                    }
+                }
+            ],
+            "user": {
+                "membership": {
+                    "level": "Coding Plus"
+                }
+            }
+        }
+        """;
+
+        var snapshot = KimiProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Kimi, snapshot.Provider);
+        Assert.Equal(2, snapshot.Windows.Count);
+        Assert.Equal("Weekly", snapshot.Windows[0].Label);
+        Assert.Equal(25.0f, snapshot.Windows[0].UsedPercent);
+        Assert.Equal("Rate Limit (120m)", snapshot.Windows[1].Label);
+        Assert.Equal(25.0f, snapshot.Windows[1].UsedPercent);
+        Assert.Equal("Coding Plus", snapshot.Identity.Plan);
+    }
+
+    [Fact]
+    public void MinimaxProvider_ParsesStringNumericLimitsCorrectly()
+    {
+        var json = """
+        {
+            "model_remains": [
+                {
+                    "model_name": "abab7-chat",
+                    "current_interval_remaining_percent": "80.5",
+                    "current_weekly_remaining_percent": "50.0"
+                }
+            ],
+            "base_resp": {
+                "status_code": 0
+            }
+        }
+        """;
+
+        var snapshot = MinimaxProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Minimax, snapshot.Provider);
+        Assert.Equal(2, snapshot.Windows.Count);
+        Assert.Equal("abab7-chat (5h)", snapshot.Windows[0].Label);
+        Assert.Equal(19.5f, snapshot.Windows[0].UsedPercent);
+        Assert.Equal("abab7-chat (Weekly)", snapshot.Windows[1].Label);
+        Assert.Equal(50.0f, snapshot.Windows[1].UsedPercent);
+    }
 }
+
 
