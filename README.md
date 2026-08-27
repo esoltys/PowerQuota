@@ -2,31 +2,54 @@
 
 A Windows-native extension for **PowerToys Command Palette** and the **PowerToys Dock** that tracks AI coding quotas for **Claude Code**, **Codex / ChatGPT**, **Cursor**, **Gemini Code Assist**, **GitHub Copilot**, **Minimax**, and **Kimi for Coding**.
 
-Converted from the open-source COSMIC panel applet [TopiCsarno/yapcap](https://github.com/TopiCsarno/yapcap) into a native C# / .NET 9 experience for Windows power users. I greatly enjoy using it on my CachyOS with COSMIC laptop and missed it on my Windows 11 desktop.
+Converted from the open-source COSMIC panel applet [TopiCsarno/yapcap](https://github.com/TopiCsarno/yapcap) into a native C# / .NET 9 experience for Windows power users.
 
 ---
 
+## Screenshots
+
+| Overview & Provider Quotas | PowerToys Dock (Usage Bars Mode) |
+|:---:|:---:|
+| ![PowerQuota Overview](docs/screenshots/overview.png) | ![PowerToys Dock Bars](docs/screenshots/dock_bars.png) |
+
+| Provider Quota Details | Clean Settings Hierarchy |
+|:---:|:---:|
+| ![Provider Quota Details](docs/screenshots/provider_details.png) | ![PowerQuota Settings](docs/screenshots/settings.png) |
+
+---
 
 ## Highlights
 
 - **7 Supported AI Providers**
-  - **Claude Code**: 5h session windows, weekly model quotas (e.g. Claude 3.7 Sonnet, Opus), extra spend limits, and host session scanning.
+  - **Claude Code**: 5h session windows, weekly model quotas (e.g. Claude 3.7 Sonnet, Opus), extra spend limits, and automatic `~/.claude/.credentials.json` discovery.
   - **Codex / ChatGPT**: 5h session limits, weekly windows, OpenAI credit balance, and `~/.codex/auth.json` host discovery.
   - **Cursor**: Safe read-only SQLite state scanning (`state.vscdb`), Fast/Composer and monthly request limits.
-  - **Gemini (Google Code Assist)**: Multi-tier quota classification (Flash, Lite, Pro) with project resolution. Not the same as Antigravity quota, unfortunately.
+  - **Gemini (Google Code Assist)**: Multi-tier quota classification (Flash, Lite, Pro) with project resolution.
   - **GitHub Copilot**: Free chat/completions or paid premium interactions quota.
   - **Minimax**: 5h interval limits and weekly token plan quotas.
   - **Kimi for Coding**: Weekly usage and rate-limit windows + OpenCode auth prefill (`~/.opencode/auth.json`).
 - **PowerToys Dock Integration**
-  - Live persistent dock bands (`GetDockBands()`) pinned directly to the PowerToys Dock.
-  - Real-time quota percentage badges (e.g., `Claude 42%`, `Codex 35%`), status indicators, and reset countdown tooltips.
+  - Live persistent dock bands pinned directly to your PowerToys Dock.
+  - Dynamic display modes: **Percentage** (`76% left`, `22% left`) or **Usage Bars** (`▰▰▰▰▰▰▱▱`).
+  - Locale-aware reset countdowns and schedules (e.g., `Resets in 1h 52m` or `Resets Friday at 2:00 PM`).
 - **Command Palette Experience**
-  - **Overview List**: Dashboard of all configured AI providers and quotas accessible with `Alt + Space` / `Win + Shift + C`.
+  - **Overview List**: Dashboard of all configured AI providers accessible with `Alt + Space` / `Win + Shift + C`.
   - **Provider Details**: Drill down into session, weekly, extra spend, and credit balances.
-  - **Settings Form**: Toggle between used % vs remaining %, relative vs absolute reset times, and refresh intervals.
-- **Zero Telemetry & Windows DPAPI Security**
-  - All API requests are sent directly from your machine to provider endpoints. No intermediate servers or telemetry.
-  - Credentials and tokens are encrypted locally using Windows Data Protection API (DPAPI with `CurrentUser` scope).
+  - **Settings Form**: Dedicated choice pages to toggle display styles, remaining vs used %, relative vs absolute clock times, and background polling intervals.
+- **Privacy First & Local DPAPI Security**
+  - Zero telemetry or third-party tracking. All requests go directly to official provider APIs.
+
+---
+
+## Privacy & Security
+
+PowerQuota is designed from the ground up to respect developer privacy and protect sensitive credentials:
+
+1. **Zero Telemetry & Zero Analytics**: PowerQuota does not collect, log, or transmit any analytics, telemetry, or user diagnostics.
+2. **Direct-to-Provider Communication**: All API requests for quota metrics are made directly from your computer to the official AI provider endpoints (e.g. `api.anthropic.com`, `chatgpt.com`, `cursor.com`, `github.com`) over encrypted HTTPS/TLS. There are no intermediate cloud servers, proxies, or relays.
+3. **Encrypted Local Storage (Windows DPAPI)**: All stored tokens and credentials are encrypted using the Windows Data Protection API (`System.Security.Cryptography.ProtectedData` with `DataProtectionScope.CurrentUser`). Credentials stored in `$env:LOCALAPPDATA\PowerQuota\vault.dat` are tied to your Windows user account and cannot be read by other users or transferred to another machine.
+4. **Read-Only Local Host Scanning**: When auto-discovering existing CLI/IDE credentials (such as Claude Code `~/.claude/.credentials.json`, Codex `~/.codex/auth.json`, or Cursor SQLite databases), PowerQuota operates strictly in read-only mode and never alters your existing login session files.
+5. **Open Source & Auditable**: The complete source code is open and verifiable under the MIT license.
 
 ---
 
@@ -47,7 +70,7 @@ PowerQuota/
 │   │   └── StorageAndEngineTests.cs
 │   │
 │   └── PowerQuota.CommandPalette/      # WinRT COM Server extension for PowerToys Command Palette & Dock
-│       ├── Assets/                     # Store & tile logo PNG assets
+│       ├── Assets/                     # Official brand vector SVG icons & assets
 │       ├── Pages/                      # OverviewListPage, ProviderDetailsPage, AddAccountFormPage, SettingsFormPage
 │       ├── Providers/                  # PowerQuotaCommandProvider (implements ICommandProvider4 & GetDockBands)
 │       ├── Package.appxmanifest        # AppExtension com.microsoft.commandpalette manifest
@@ -102,7 +125,7 @@ PowerQuota/
 4. Open **PowerToys Settings** -> **Command Palette**:
    - Enable **Command Palette** and **Enable Dock**.
    - Press `Win + Shift + C` (or configured shortcut) and type `powerquota` to view your AI quotas.
-   - Pinned dock bands will appear in your persistent PowerToys Dock bar with real-time percentages!
+   - Pinned dock bands will appear in your persistent PowerToys Dock bar with real-time percentages or usage bars!
 
 ---
 
@@ -145,4 +168,3 @@ This project is a native Windows & PowerToys port inspired by and based on the w
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
-
