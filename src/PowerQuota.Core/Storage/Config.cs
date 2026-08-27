@@ -5,9 +5,11 @@ namespace PowerQuota.Core.Storage;
 
 public enum DockDisplayMode
 {
-    LogoAndPercentage,
-    PercentageOnly,
-    BarsOnly
+    Percentage,
+    Bars,
+    LogoAndPercentage = Percentage,
+    PercentageOnly = Percentage,
+    BarsOnly = Bars
 }
 
 public class AccountConfig

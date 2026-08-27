@@ -84,17 +84,11 @@ public class ProviderDetailsPage : ListPage
 
                     string subtitle = string.Join(" • ", subtitleParts);
 
-                    string itemTitle = config.DockDisplayMode switch
-                    {
-                        DockDisplayMode.BarsOnly => GetProgressBar(percent, 8),
-                        _ => pctLabel
-                    };
+                    string itemTitle = config.DockDisplayMode == DockDisplayMode.Bars
+                        ? GetProgressBar(percent, 8)
+                        : pctLabel;
 
-                    IIconInfo? icon = config.DockDisplayMode switch
-                    {
-                        DockDisplayMode.PercentageOnly => null,
-                        _ => ProviderIcons.GetIcon(_provider)
-                    };
+                    var icon = ProviderIcons.GetIcon(_provider);
 
                     items.Add(new ListItem(new AnonymousCommand(() =>
                     {

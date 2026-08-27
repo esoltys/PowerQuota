@@ -154,17 +154,11 @@ public class PowerQuotaCommandProvider : CommandProvider
 
                         string subtitle = string.Join(" • ", subtitleParts);
 
-                        string itemTitle = config.DockDisplayMode switch
-                        {
-                            DockDisplayMode.BarsOnly => GetProgressBar(percent, 8),
-                            _ => pctLabel
-                        };
+                        string itemTitle = config.DockDisplayMode == DockDisplayMode.Bars
+                            ? GetProgressBar(percent, 8)
+                            : pctLabel;
 
-                        IIconInfo? icon = config.DockDisplayMode switch
-                        {
-                            DockDisplayMode.PercentageOnly => null,
-                            _ => ProviderIcons.GetIcon(pid)
-                        };
+                        var icon = ProviderIcons.GetIcon(pid);
 
                         var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
                         bands.Add(new CommandItem(page)

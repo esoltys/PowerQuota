@@ -25,13 +25,7 @@ public class SettingsFormPage : ListPage
         var items = new List<IListItem>();
 
         // 1. Dock Band Style
-        string dockModeLabel = config.DockDisplayMode switch
-        {
-            DockDisplayMode.LogoAndPercentage => "Logo and Percentage",
-            DockDisplayMode.PercentageOnly => "Percentage Only",
-            DockDisplayMode.BarsOnly => "Usage Bars Only",
-            _ => "Logo and Percentage"
-        };
+        string dockModeLabel = config.DockDisplayMode == DockDisplayMode.Bars ? "Usage Bars" : "Percentage";
 
         var dockStylePage = new SettingChoicePage(
             title: "Dock Band Style",
@@ -40,19 +34,14 @@ public class SettingsFormPage : ListPage
                 var cur = _configStorage.Current;
                 return new[]
                 {
-                    new SettingChoice("Logo and Percentage", "Display provider icon and percentage text (e.g. ✦ 76% left)", cur.DockDisplayMode == DockDisplayMode.LogoAndPercentage, () =>
+                    new SettingChoice("Percentage", "Display percentage text (e.g. 76% left)", cur.DockDisplayMode == DockDisplayMode.Percentage, () =>
                     {
-                        cur.DockDisplayMode = DockDisplayMode.LogoAndPercentage;
+                        cur.DockDisplayMode = DockDisplayMode.Percentage;
                         Save(cur);
                     }),
-                    new SettingChoice("Percentage Only", "Display percentage text without brand icon", cur.DockDisplayMode == DockDisplayMode.PercentageOnly, () =>
+                    new SettingChoice("Usage Bars", "Display visual progress bars (e.g. ▰▰▰▰▰▰▱▱)", cur.DockDisplayMode == DockDisplayMode.Bars, () =>
                     {
-                        cur.DockDisplayMode = DockDisplayMode.PercentageOnly;
-                        Save(cur);
-                    }),
-                    new SettingChoice("Usage Bars Only", "Display compact visual progress bars only", cur.DockDisplayMode == DockDisplayMode.BarsOnly, () =>
-                    {
-                        cur.DockDisplayMode = DockDisplayMode.BarsOnly;
+                        cur.DockDisplayMode = DockDisplayMode.Bars;
                         Save(cur);
                     })
                 };
