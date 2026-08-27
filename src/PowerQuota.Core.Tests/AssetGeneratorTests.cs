@@ -205,9 +205,9 @@ public class AssetGeneratorTests
             Color.FromArgb(255, 11, 14, 20));
         g.FillRectangle(bgBrush, 0, 0, width, height);
 
-        float iconSize = height * 0.70f;
-        float iconX = height * 0.15f;
-        float iconY = height * 0.15f;
+        float iconSize = height * 0.58f;
+        float iconX = width * 0.07f;
+        float iconY = (height - iconSize) / 2.0f;
 
         using var tempBmp = new Bitmap((int)iconSize, (int)iconSize, PixelFormat.Format32bppArgb);
         using (var tempG = Graphics.FromImage(tempBmp))
@@ -218,17 +218,17 @@ public class AssetGeneratorTests
         }
         g.DrawImage(tempBmp, iconX, iconY, iconSize, iconSize);
 
-        float textX = iconX + iconSize + (height * 0.15f);
-        float titleFontSize = height * 0.22f;
-        float subFontSize = height * 0.11f;
+        float textX = iconX + iconSize + (width * 0.05f);
+        float titleFontSize = height * 0.17f;
+        float subFontSize = height * 0.09f;
 
         using var titleFont = new Font("Segoe UI", titleFontSize, FontStyle.Bold, GraphicsUnit.Pixel);
         using var subFont = new Font("Segoe UI", subFontSize, FontStyle.Regular, GraphicsUnit.Pixel);
         using var titleBrush = new SolidBrush(Color.White);
         using var subBrush = new SolidBrush(Color.FromArgb(255, 148, 163, 184));
 
-        g.DrawString("PowerQuota", titleFont, titleBrush, textX, height * 0.26f);
-        g.DrawString("AI Coding Quotas for PowerToys", subFont, subBrush, textX, height * 0.58f);
+        g.DrawString("PowerQuota", titleFont, titleBrush, textX, height * 0.28f);
+        g.DrawString("AI Coding Quota Tracker", subFont, subBrush, textX, height * 0.56f);
 
         bmp.Save(path, ImageFormat.Png);
     }
