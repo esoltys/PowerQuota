@@ -1,7 +1,9 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
+using PowerQuota.Core.Utilities;
 
 namespace PowerQuota.Core.Providers;
 
@@ -27,15 +29,16 @@ public class CopilotProvider : IProviderAdapter
             }
         }
 
-        var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("token", tokens.AccessToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.Add("Editor-Version", "vscode/1.107.0");
-        request.Headers.Add("Editor-Plugin-Version", "copilot-chat/0.35.0");
-        request.Headers.Add("User-Agent", "GitHubCopilotChat/0.35.0");
-        request.Headers.Add("X-Github-Api-Version", "2026-03-10");
-
+        var request = CreateCopilotRequest(tokens.AccessToken, "vscode/1.107.0", "copilot-chat/0.35.0");
         var response = await client.SendAsync(request, ct);
+
+        // Header fallback if rejected with client error
+        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest || response.StatusCode == System.Net.HttpStatusCode.UpgradeRequired)
+        {
+            request = CreateCopilotRequest(tokens.AccessToken, "vscode/1.108.0", "copilot-chat/0.36.0");
+            response = await client.SendAsync(request, ct);
+        }
+
         if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
         {
             throw new UnauthorizedAccessException("GitHub Copilot session expired");
@@ -44,6 +47,19 @@ public class CopilotProvider : IProviderAdapter
         response.EnsureSuccessStatusCode();
         var json = await response.Content.ReadAsStringAsync(ct);
         return ParseUsage(json, account);
+    }
+
+    private static HttpRequestMessage CreateCopilotRequest(string token, string editorVersion, string pluginVersion)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
+        request.Headers.Authorization = new AuthenticationHeaderValue("token", token);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        request.Headers.Add("Editor-Version", editorVersion);
+        request.Headers.Add("Editor-Plugin-Version", pluginVersion);
+        var pluginVerNum = pluginVersion.Contains('/') ? pluginVersion.Split('/')[1] : pluginVersion;
+        request.Headers.Add("User-Agent", $"GitHubCopilotChat/{pluginVerNum}");
+        request.Headers.Add("X-Github-Api-Version", "2026-03-10");
+        return request;
     }
 
     public Task<string?> GetSystemActiveAccountIdAsync(IReadOnlyList<AccountConfig> accounts, WindowsCredentialVault vault)
@@ -69,34 +85,45 @@ public class CopilotProvider : IProviderAdapter
 
         if (root.TryGetProperty("quota_snapshots", out var snapshots))
         {
-            if (snapshots.TryGetProperty("chat", out var chat))
+            if (snapshots.ValueKind == JsonValueKind.Object)
             {
-                int entitlement = chat.TryGetProperty("entitlement", out var ent) ? ent.GetInt32() : 0;
-                int remaining = chat.TryGetProperty("remaining", out var rem) ? rem.GetInt32() : 0;
-                float usedPct = entitlement > 0 ? ((float)(entitlement - remaining) / entitlement * 100f) : 0f;
-
-                windows.Add(new UsageWindow
+                foreach (var prop in snapshots.EnumerateObject())
                 {
-                    Label = "Chat",
-                    UsedPercent = Math.Clamp(usedPct, 0f, 100f),
-                    ResetAt = resetDate,
-                    ResetDescription = $"{entitlement - remaining} / {entitlement} messages"
-                });
-            }
+                    var snapshotObj = prop.Value;
+                    if (snapshotObj.ValueKind != JsonValueKind.Object) continue;
 
-            if (snapshots.TryGetProperty("completions", out var comp))
-            {
-                int entitlement = comp.TryGetProperty("entitlement", out var ent) ? ent.GetInt32() : 0;
-                int remaining = comp.TryGetProperty("remaining", out var rem) ? rem.GetInt32() : 0;
-                float usedPct = entitlement > 0 ? ((float)(entitlement - remaining) / entitlement * 100f) : 0f;
+                    string rawKey = prop.Name;
+                    string label = FormatSnapshotLabel(rawKey);
 
-                windows.Add(new UsageWindow
-                {
-                    Label = "Completions",
-                    UsedPercent = Math.Clamp(usedPct, 0f, 100f),
-                    ResetAt = resetDate,
-                    ResetDescription = $"{entitlement - remaining} / {entitlement} completions"
-                });
+                    snapshotObj.TryGetPropertyInt32("entitlement", out var entitlement);
+                    snapshotObj.TryGetPropertyInt32("remaining", out var remaining);
+
+                    float usedPct = 0f;
+                    if (entitlement > 0)
+                    {
+                        usedPct = (float)(entitlement - remaining) / entitlement * 100f;
+                    }
+                    else if (snapshotObj.TryGetPropertySingle("used_percent", out var up))
+                    {
+                        usedPct = up;
+                    }
+
+                    string unit = rawKey.Contains("completion", StringComparison.OrdinalIgnoreCase) ? "completions"
+                        : rawKey.Contains("chat", StringComparison.OrdinalIgnoreCase) ? "messages"
+                        : "requests";
+
+                    string desc = entitlement > 0
+                        ? $"{entitlement - remaining} / {entitlement} {unit}"
+                        : $"{remaining} {unit} remaining";
+
+                    windows.Add(new UsageWindow
+                    {
+                        Label = label,
+                        UsedPercent = Math.Clamp(usedPct, 0f, 100f),
+                        ResetAt = resetDate,
+                        ResetDescription = desc
+                    });
+                }
             }
         }
 
@@ -118,5 +145,23 @@ public class CopilotProvider : IProviderAdapter
             }
         };
     }
-}
 
+    private static string FormatSnapshotLabel(string key)
+    {
+        return key.ToLowerInvariant() switch
+        {
+            "chat" => "Chat",
+            "completions" => "Completions",
+            "claude_3_7_sonnet" or "claude-3-7-sonnet" or "claude_3.7_sonnet" => "Claude 3.7 Sonnet",
+            "claude_3_5_sonnet" or "claude-3-5-sonnet" or "claude_3.5_sonnet" => "Claude 3.5 Sonnet",
+            "gpt_4o" or "gpt-4o" => "GPT-4o",
+            "gpt_4o_mini" or "gpt-4o-mini" => "GPT-4o mini",
+            "o1" => "o1",
+            "o1_mini" or "o1-mini" => "o1-mini",
+            "o3_mini" or "o3-mini" => "o3-mini",
+            "gemini_2_0_flash" or "gemini-2-0-flash" or "gemini_2.0_flash" => "Gemini 2.0 Flash",
+            "premium_interactions" => "Premium Interactions",
+            _ => CultureInfo.InvariantCulture.TextInfo.ToTitleCase(key.Replace("_", " ").Replace("-", " "))
+        };
+    }
+}

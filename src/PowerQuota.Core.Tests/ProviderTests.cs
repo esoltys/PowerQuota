@@ -234,6 +234,49 @@ public class ProviderTests
     }
 
     [Fact]
+    public void CopilotProvider_ParsesMultiModelAndPremiumSnapshots()
+    {
+        var json = """
+        {
+            "access_type_sku": "copilot_enterprise",
+            "login": "octocat",
+            "quota_reset_date_utc": "2026-09-01T00:00:00Z",
+            "quota_snapshots": {
+                "chat": {
+                    "entitlement": 500,
+                    "remaining": 250
+                },
+                "claude_3_7_sonnet": {
+                    "entitlement": 100,
+                    "remaining": 70
+                },
+                "gpt_4o": {
+                    "entitlement": 200,
+                    "remaining": 40
+                },
+                "premium_interactions": {
+                    "entitlement": 50,
+                    "remaining": 10
+                }
+            }
+        }
+        """;
+
+        var snapshot = CopilotProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Copilot, snapshot.Provider);
+        Assert.Equal(4, snapshot.Windows.Count);
+        Assert.Equal("Chat", snapshot.Windows[0].Label);
+        Assert.Equal(50.0f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Equal("Claude 3.7 Sonnet", snapshot.Windows[1].Label);
+        Assert.Equal(30.0f, snapshot.Windows[1].UsedPercent, 1);
+        Assert.Equal("GPT-4o", snapshot.Windows[2].Label);
+        Assert.Equal(80.0f, snapshot.Windows[2].UsedPercent, 1);
+        Assert.Equal("Premium Interactions", snapshot.Windows[3].Label);
+        Assert.Equal(80.0f, snapshot.Windows[3].UsedPercent, 1);
+    }
+
+    [Fact]
     public void MinimaxProvider_ParsesIntervalAndWeeklyLimits()
     {
         var json = """
