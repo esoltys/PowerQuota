@@ -8,13 +8,17 @@ Converted from the open-source COSMIC panel applet [TopiCsarno/yapcap](https://g
 
 ## Screenshots
 
-| Overview & Provider Quotas | PowerToys Dock (Usage Bars Mode) |
+| Overview & Quotas | Provider Quota Details |
 |:---:|:---:|
-| ![PowerQuota Overview](docs/screenshots/overview.png) | ![PowerToys Dock Bars](docs/screenshots/dock_bars.png) |
+| ![PowerQuota Overview](docs/overview.png) | ![Provider Details](docs/command-palette.png) |
 
-| Provider Quota Details | Clean Settings Hierarchy |
+| PowerToys Dock Integration | Live Reset Tooltips |
 |:---:|:---:|
-| ![Provider Quota Details](docs/screenshots/provider_details.png) | ![PowerQuota Settings](docs/screenshots/settings.png) |
+| ![PowerToys Dock Cards](docs/dock-01.png) | ![Dock Tooltips](docs/dock-02.png) |
+
+| Settings & Preferences | Connect AI Providers |
+|:---:|:---:|
+| ![PowerQuota Settings](docs/settings.png) | ![Add Provider Account](docs/add-provider.png) |
 
 ---
 
@@ -58,6 +62,13 @@ PowerQuota is designed from the ground up to respect developer privacy and prote
 ```
 PowerQuota/
 ├── PowerQuota.sln
+├── docs/                               # Documentation screenshots
+│   ├── overview.png
+│   ├── command-palette.png
+│   ├── dock-01.png
+│   ├── dock-02.png
+│   ├── settings.png
+│   └── add-provider.png
 ├── src/
 │   ├── PowerQuota.Core/                # AI quota engine, provider adapters, DPAPI vault, CLI scanner
 │   │   ├── Engine/                     # QuotaRefreshService with exponential rate-limit backoff
