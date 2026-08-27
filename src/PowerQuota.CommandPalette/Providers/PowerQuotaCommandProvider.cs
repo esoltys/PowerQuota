@@ -78,60 +78,6 @@ public class PowerQuotaCommandProvider : CommandProvider
                 }
             });
 
-            foreach (var acc in accounts)
-            {
-                if (acc.Snapshot is { } snapshot && snapshot.Windows.Count > 0)
-                {
-                    foreach (var window in snapshot.Windows)
-                    {
-                        float percent = config.DisplayRemainingNotUsed ? Math.Clamp(100f - window.UsedPercent, 0f, 100f) : window.UsedPercent;
-                        string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
-
-                        string resetFormatted = window.FormatResetText(config.ShowRelativeResetTimes);
-                        string resetPhrase;
-                        if (string.IsNullOrEmpty(resetFormatted))
-                        {
-                            resetPhrase = window.Label;
-                        }
-                        else if (resetFormatted.StartsWith("Resets ", StringComparison.OrdinalIgnoreCase))
-                        {
-                            resetPhrase = $"{window.Label} resets {resetFormatted.Substring(7)}";
-                        }
-                        else
-                        {
-                            resetPhrase = $"{window.Label} {resetFormatted.ToLowerInvariant()}";
-                        }
-
-                        var subtitleParts = new List<string> { pctLabel, resetPhrase };
-                        if (!string.IsNullOrEmpty(window.ResetDescription))
-                        {
-                            subtitleParts.Add(window.ResetDescription);
-                        }
-                        if (accounts.Count > 1)
-                        {
-                            subtitleParts.Add(acc.Label);
-                        }
-                        string subtitle = string.Join(" • ", subtitleParts);
-
-                        commands.Add(new CommandItem(page)
-                        {
-                            Title = $"{pid.GetLabel()} ({window.Label}) Quota",
-                            Subtitle = subtitle,
-                            Icon = ProviderIcons.GetIcon(pid),
-                            MoreCommands = new IContextItem[]
-                            {
-                                new CommandContextItem(new AnonymousCommand(() =>
-                                {
-                                    _ = _refreshService.RefreshProviderAsync(pid);
-                                }))
-                                {
-                                    Title = "Refresh Quota"
-                                }
-                            }
-                        });
-                    }
-                }
-            }
         }
 
         // 3. Quick Action Commands
