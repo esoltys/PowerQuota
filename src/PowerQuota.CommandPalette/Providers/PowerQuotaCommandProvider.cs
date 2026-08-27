@@ -9,20 +9,27 @@ namespace PowerQuota.CommandPalette.Providers;
 
 public class PowerQuotaCommandProvider : CommandProvider
 {
-    private readonly ConfigStorage _configStorage = new();
-    private readonly WindowsCredentialVault _vault = new();
+    private readonly ConfigStorage _configStorage;
+    private readonly WindowsCredentialVault _vault;
     private readonly QuotaRefreshService _refreshService;
     private readonly OverviewListPage _overviewPage;
     private readonly AddAccountFormPage _addAccountPage;
     private readonly SettingsFormPage _settingsPage;
 
     public PowerQuotaCommandProvider()
+        : this(new ConfigStorage(), new WindowsCredentialVault(), null)
+    {
+    }
+
+    public PowerQuotaCommandProvider(ConfigStorage configStorage, WindowsCredentialVault vault, QuotaRefreshService? refreshService = null)
     {
         Id = "PowerQuota.CommandPalette";
         DisplayName = "PowerQuota";
         Icon = new IconInfo("\uE945");
 
-        _refreshService = new QuotaRefreshService(_configStorage, _vault);
+        _configStorage = configStorage;
+        _vault = vault;
+        _refreshService = refreshService ?? new QuotaRefreshService(_configStorage, _vault);
         _overviewPage = new OverviewListPage(_refreshService, _configStorage, _vault);
         _addAccountPage = new AddAccountFormPage(_refreshService, _configStorage, _vault);
         _settingsPage = new SettingsFormPage(_configStorage, _refreshService);
@@ -42,6 +49,8 @@ public class PowerQuotaCommandProvider : CommandProvider
         var config = _configStorage.Current;
 
         // 1. Primary entrypoint: PowerQuota Overview
+        _overviewPage.Id = "powerquota-overview";
+        _overviewPage.Name = "PowerQuota";
         commands.Add(new CommandItem(_overviewPage)
         {
             Title = "PowerQuota",
@@ -57,7 +66,11 @@ public class PowerQuotaCommandProvider : CommandProvider
             var accounts = _refreshService.State.ProviderAccounts.Where(a => a.Provider == pid).ToList();
             if (accounts.Count == 0 && !config.Accounts.Any(a => a.Provider == pid)) continue;
 
-            var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+            var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
+            {
+                Id = $"provider-{pid}",
+                Name = $"{pid.GetLabel()} Quota"
+            };
 
             var primaryAcc = accounts.FirstOrDefault();
             string statusLine = primaryAcc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
@@ -71,7 +84,11 @@ public class PowerQuotaCommandProvider : CommandProvider
                     new CommandContextItem(new AnonymousCommand(() =>
                     {
                         _ = _refreshService.RefreshProviderAsync(pid);
-                    }))
+                    })
+                    {
+                        Id = $"refresh-{pid}",
+                        Name = $"Refresh {pid.GetLabel()} Quota"
+                    })
                     {
                         Title = "Refresh Quota"
                     }
@@ -84,13 +101,19 @@ public class PowerQuotaCommandProvider : CommandProvider
         commands.Add(new CommandItem(new AnonymousCommand(() =>
         {
             _ = _refreshService.RefreshAllAsync();
-        }))
+        })
+        {
+            Id = "action-refresh-all",
+            Name = "Refresh All Quotas"
+        })
         {
             Title = "Refresh All Quotas",
             Subtitle = "Query all providers for current quota metrics",
             Icon = new IconInfo("\uE72C")
         });
 
+        _addAccountPage.Id = "action-add-account";
+        _addAccountPage.Name = "Add Account";
         commands.Add(new CommandItem(_addAccountPage)
         {
             Title = "Add Account...",
@@ -98,6 +121,8 @@ public class PowerQuotaCommandProvider : CommandProvider
             Icon = new IconInfo("\uE710")
         });
 
+        _settingsPage.Id = "action-settings";
+        _settingsPage.Name = "PowerQuota Settings";
         commands.Add(new CommandItem(_settingsPage)
         {
             Title = "PowerQuota Settings",
@@ -116,7 +141,11 @@ public class PowerQuotaCommandProvider : CommandProvider
                 });
             }
             catch { }
-        }))
+        })
+        {
+            Id = "action-github",
+            Name = "PowerQuota GitHub Repository"
+        })
         {
             Title = "PowerQuota GitHub Repository",
             Subtitle = "Open github.com/esoltys/PowerQuota in browser",
@@ -136,10 +165,49 @@ public class PowerQuotaCommandProvider : CommandProvider
             if (!config.EnabledProviders.Contains(pid)) continue;
 
             var accounts = _refreshService.State.ProviderAccounts.Where(a => a.Provider == pid).ToList();
-            if (accounts.Count == 0 && !config.Accounts.Any(a => a.Provider == pid)) continue;
+            var configuredAccounts = config.Accounts.Where(a => a.Provider == pid).ToList();
+            if (accounts.Count == 0 && configuredAccounts.Count == 0) continue;
+
+            if (accounts.Count == 0)
+            {
+                if (configuredAccounts.Count > 0)
+                {
+                    foreach (var cfgAcc in configuredAccounts)
+                    {
+                        string accountKey = string.IsNullOrEmpty(cfgAcc.Id) ? "default" : cfgAcc.Id;
+                        var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
+                        {
+                            Id = $"dock-{pid}-{accountKey}-status",
+                            Name = $"{pid.GetLabel()} Quota"
+                        };
+                        bands.Add(new CommandItem(page)
+                        {
+                            Title = $"{pid.GetLabel()} Quota",
+                            Subtitle = "Ready",
+                            Icon = ProviderIcons.GetIcon(pid)
+                        });
+                    }
+                }
+                else
+                {
+                    var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
+                    {
+                        Id = $"dock-{pid}-default-status",
+                        Name = $"{pid.GetLabel()} Quota"
+                    };
+                    bands.Add(new CommandItem(page)
+                    {
+                        Title = $"{pid.GetLabel()} Quota",
+                        Subtitle = "Ready",
+                        Icon = ProviderIcons.GetIcon(pid)
+                    });
+                }
+                continue;
+            }
 
             foreach (var acc in accounts)
             {
+                string accountKey = string.IsNullOrEmpty(acc.AccountId) ? "default" : acc.AccountId;
                 if (acc.Snapshot is { } snapshot && snapshot.Windows.Count > 0)
                 {
                     foreach (var window in snapshot.Windows)
@@ -180,7 +248,11 @@ public class PowerQuotaCommandProvider : CommandProvider
 
                         var icon = ProviderIcons.GetIcon(pid);
 
-                        var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+                        var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
+                        {
+                            Id = $"dock-{pid}-{accountKey}-{window.Label}",
+                            Name = $"{pid.GetLabel()} - {window.Label}"
+                        };
                         bands.Add(new CommandItem(page)
                         {
                             Title = itemTitle,
@@ -191,7 +263,11 @@ public class PowerQuotaCommandProvider : CommandProvider
                                 new CommandContextItem(new AnonymousCommand(() =>
                                 {
                                     _ = _refreshService.RefreshProviderAsync(pid);
-                                }))
+                                })
+                                {
+                                    Id = $"dock-refresh-{pid}-{accountKey}-{window.Label}",
+                                    Name = $"Refresh {pid.GetLabel()} Quota"
+                                })
                                 {
                                     Title = "Refresh Quota"
                                 }
@@ -202,7 +278,11 @@ public class PowerQuotaCommandProvider : CommandProvider
                 else
                 {
                     string status = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
-                    var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+                    var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
+                    {
+                        Id = $"dock-{pid}-{accountKey}-status",
+                        Name = $"{pid.GetLabel()} Quota"
+                    };
                     bands.Add(new CommandItem(page)
                     {
                         Title = $"{pid.GetLabel()} Quota",
@@ -225,7 +305,26 @@ public class PowerQuotaCommandProvider : CommandProvider
 
     public override ICommandItem? GetCommandItem(string id)
     {
-        return TopLevelCommands().FirstOrDefault(c => c.Title.Contains(id, StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        var allItems = TopLevelCommands().Concat(GetDockBands()).ToList();
+
+        // 1. Exact match on Command.Id
+        var match = allItems.FirstOrDefault(c => string.Equals(c.Command?.Id, id, StringComparison.OrdinalIgnoreCase));
+        if (match != null) return match;
+
+        // 2. Suffix / prefix match on Command.Id (to handle host package/provider prefixing)
+        match = allItems.FirstOrDefault(c => !string.IsNullOrEmpty(c.Command?.Id) &&
+            (id.EndsWith(c.Command.Id, StringComparison.OrdinalIgnoreCase) || c.Command.Id.EndsWith(id, StringComparison.OrdinalIgnoreCase)));
+        if (match != null) return match;
+
+        // 3. Fallback: match by Title
+        return allItems.FirstOrDefault(c => c.Title.Contains(id, StringComparison.OrdinalIgnoreCase) || id.Contains(c.Title, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public override ICommand? GetCommand(string id)
+    {
+        return GetCommandItem(id)?.Command;
     }
 
     public override void Dispose()
