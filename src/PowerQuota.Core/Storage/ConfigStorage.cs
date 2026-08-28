@@ -4,56 +4,119 @@ namespace PowerQuota.Core.Storage;
 
 public class ConfigStorage
 {
-    private static readonly string StorageDir = Path.Combine(
+    public static readonly string DefaultStorageDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PowerQuota"
     );
-    private static readonly string ConfigFile = Path.Combine(StorageDir, "config.json");
+    public static readonly string DefaultConfigFile = Path.Combine(DefaultStorageDir, "config.json");
 
+    private readonly string _configFilePath;
     private readonly object _lock = new();
-    private PowerQuotaConfig _current = new();
+    private PowerQuotaConfig _current;
 
-    public ConfigStorage()
+    public ConfigStorage(string? configFilePath = null)
     {
+        _configFilePath = !string.IsNullOrWhiteSpace(configFilePath)
+            ? configFilePath
+            : DefaultConfigFile;
         _current = Load();
     }
+
+    public string ConfigFilePath => _configFilePath;
 
     public PowerQuotaConfig Current
     {
         get
         {
-            lock (_lock) return _current;
+            lock (_lock)
+            {
+                return _current.Clone();
+            }
+        }
+    }
+
+    public PowerQuotaConfig Mutate(Action<PowerQuotaConfig> mutator)
+    {
+        ArgumentNullException.ThrowIfNull(mutator);
+        lock (_lock)
+        {
+            var clone = _current.Clone();
+            mutator(clone);
+            if (SaveInternal(clone))
+            {
+                _current = clone;
+            }
+            return _current.Clone();
         }
     }
 
     public void Save(PowerQuotaConfig config)
     {
+        ArgumentNullException.ThrowIfNull(config);
         lock (_lock)
         {
-            _current = config;
-            try
+            var clone = config.Clone();
+            if (SaveInternal(clone))
             {
-                Directory.CreateDirectory(StorageDir);
-                var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(ConfigFile, json);
+                _current = clone;
             }
-            catch (Exception ex)
+        }
+    }
+
+    public PowerQuotaConfig Reload()
+    {
+        lock (_lock)
+        {
+            _current = Load();
+            return _current.Clone();
+        }
+    }
+
+    private bool SaveInternal(PowerQuotaConfig config)
+    {
+        var dir = Path.GetDirectoryName(_configFilePath);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var tempFile = Path.Combine(
+            string.IsNullOrEmpty(dir) ? "." : dir,
+            $"{Path.GetFileName(_configFilePath)}.{Guid.NewGuid():N}.tmp"
+        );
+
+        try
+        {
+            var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(tempFile, json);
+            File.Move(tempFile, _configFilePath, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota Config] Save error: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
             {
-                System.Diagnostics.Debug.WriteLine($"[PowerQuota Config] Save error: {ex.Message}");
+                try { File.Delete(tempFile); } catch { }
             }
         }
     }
 
     private PowerQuotaConfig Load()
     {
-        if (!File.Exists(ConfigFile)) return new PowerQuotaConfig();
+        if (!File.Exists(_configFilePath)) return new PowerQuotaConfig();
         try
         {
-            var json = File.ReadAllText(ConfigFile);
+            var json = File.ReadAllText(_configFilePath);
             return JsonSerializer.Deserialize<PowerQuotaConfig>(json) ?? new PowerQuotaConfig();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota Config] Load error: {ex.Message}");
             return new PowerQuotaConfig();
         }
     }

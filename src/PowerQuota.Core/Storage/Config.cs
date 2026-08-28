@@ -40,6 +40,19 @@ public class AccountConfig
 
     [JsonPropertyName("last_authenticated_at")]
     public DateTimeOffset? LastAuthenticatedAt { get; set; }
+
+    public AccountConfig Clone() => new()
+    {
+        Id = Id,
+        Provider = Provider,
+        Label = Label,
+        Email = Email,
+        ProviderAccountId = ProviderAccountId,
+        ApiKeySource = ApiKeySource,
+        CreatedAt = CreatedAt,
+        UpdatedAt = UpdatedAt,
+        LastAuthenticatedAt = LastAuthenticatedAt
+    };
 }
 
 public class PowerQuotaConfig
@@ -61,5 +74,16 @@ public class PowerQuotaConfig
 
     [JsonPropertyName("enabled_providers")]
     public HashSet<ProviderId> EnabledProviders { get; set; } = new(Enum.GetValues<ProviderId>());
+
+    public PowerQuotaConfig Clone() => new()
+    {
+        RefreshIntervalMinutes = RefreshIntervalMinutes,
+        DisplayRemainingNotUsed = DisplayRemainingNotUsed,
+        ShowRelativeResetTimes = ShowRelativeResetTimes,
+        DockDisplayMode = DockDisplayMode,
+        Accounts = Accounts.Select(a => a.Clone()).ToList(),
+        EnabledProviders = new HashSet<ProviderId>(EnabledProviders)
+    };
 }
+
 
