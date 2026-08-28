@@ -20,7 +20,10 @@ public class ProviderDetailsPage : ListPage
         _refreshService = refreshService;
         _configStorage = configStorage;
         _vault = vault;
+        Id = $"provider-{provider}";
+        Name = $"{provider.GetLabel()} Quota";
         Title = $"{provider.GetLabel()} Quota";
+        Icon = ProviderIcons.GetIcon(provider);
         PlaceholderText = $"Filter {provider.GetLabel()} quotas...";
 
         _refreshService.StateChanged += (_, _) => RaiseItemsChanged(GetItems().Length);

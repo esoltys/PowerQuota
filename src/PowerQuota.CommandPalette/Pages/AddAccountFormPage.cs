@@ -18,7 +18,10 @@ public class AddAccountFormPage : ListPage
         _refreshService = refreshService;
         _configStorage = configStorage;
         _vault = vault;
+        Id = "action-add-account";
+        Name = "Add Account";
         Title = "Add AI Provider Account";
+        Icon = new IconInfo("\uE710");
         PlaceholderText = "Select a provider to connect...";
     }
 

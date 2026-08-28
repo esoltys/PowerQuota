@@ -11,7 +11,7 @@ public class QuotaRefreshService : IDisposable
     private readonly WindowsCredentialVault _vault;
     private readonly HttpClient _httpClient;
     private readonly Dictionary<ProviderId, IProviderAdapter> _adapters = new();
-    private readonly Timer _timer;
+    private readonly Timer? _timer;
     private readonly object _stateLock = new();
 
     public AppState State { get; private set; } = new();
@@ -25,7 +25,7 @@ public class QuotaRefreshService : IDisposable
         }
     }
 
-    public QuotaRefreshService(ConfigStorage configStorage, WindowsCredentialVault vault, HttpClient? httpClient = null)
+    public QuotaRefreshService(ConfigStorage configStorage, WindowsCredentialVault vault, HttpClient? httpClient = null, bool autoStartTimer = true)
     {
         _configStorage = configStorage;
         _vault = vault;
@@ -42,8 +42,11 @@ public class QuotaRefreshService : IDisposable
 
         InitializeState();
 
-        int intervalMs = Math.Max(1, _configStorage.Current.RefreshIntervalMinutes) * 60 * 1000;
-        _timer = new Timer(async _ => await RefreshAllAsync(), null, 1000, intervalMs);
+        if (autoStartTimer)
+        {
+            int intervalMs = Math.Max(1, _configStorage.Current.RefreshIntervalMinutes) * 60 * 1000;
+            _timer = new Timer(async _ => await RefreshAllAsync(), null, 1000, intervalMs);
+        }
     }
 
     private void RegisterAdapter(IProviderAdapter adapter)
@@ -77,14 +80,21 @@ public class QuotaRefreshService : IDisposable
         {
             if (config.EnabledProviders.Contains(pid))
             {
-                tasks.Add(RefreshProviderAsync(pid, ct));
+                tasks.Add(RefreshProviderInternalAsync(pid, ct));
             }
         }
 
         await Task.WhenAll(tasks);
+        StateChanged?.Invoke(this, State);
     }
 
     public async Task RefreshProviderAsync(ProviderId provider, CancellationToken ct = default)
+    {
+        await RefreshProviderInternalAsync(provider, ct);
+        StateChanged?.Invoke(this, State);
+    }
+
+    private async Task RefreshProviderInternalAsync(ProviderId provider, CancellationToken ct = default)
     {
         if (!_adapters.TryGetValue(provider, out var adapter)) return;
 
@@ -229,7 +239,7 @@ public class QuotaRefreshService : IDisposable
 
     public void Dispose()
     {
-        _timer.Dispose();
+        _timer?.Dispose();
         _httpClient.Dispose();
     }
 }
