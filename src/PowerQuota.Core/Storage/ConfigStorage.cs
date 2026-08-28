@@ -8,19 +8,29 @@ public class ConfigStorage
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PowerQuota"
     );
+    public static readonly string DefaultConfigFile = Path.Combine(DefaultStorageDir, "config.json");
 
-    public string StorageDirectory { get; }
-    public string ConfigFilePath { get; }
-
+    private readonly string _configFilePath;
     private readonly object _lock = new();
-    private PowerQuotaConfig _current = new();
+    private PowerQuotaConfig _current;
 
-    public ConfigStorage(string? customDirectoryPath = null)
+    public string StorageDirectory => Path.GetDirectoryName(_configFilePath) ?? DefaultStorageDir;
+    public string ConfigFilePath => _configFilePath;
+
+    public ConfigStorage(string? customPath = null)
     {
-        StorageDirectory = !string.IsNullOrWhiteSpace(customDirectoryPath)
-            ? customDirectoryPath
-            : DefaultStorageDir;
-        ConfigFilePath = Path.Combine(StorageDirectory, "config.json");
+        if (string.IsNullOrWhiteSpace(customPath))
+        {
+            _configFilePath = DefaultConfigFile;
+        }
+        else if (Directory.Exists(customPath) || !customPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            _configFilePath = Path.Combine(customPath, "config.json");
+        }
+        else
+        {
+            _configFilePath = customPath;
+        }
         _current = Load();
     }
 
@@ -28,40 +38,96 @@ public class ConfigStorage
     {
         get
         {
-            lock (_lock) return _current;
+            lock (_lock)
+            {
+                return _current.Clone();
+            }
+        }
+    }
+
+    public PowerQuotaConfig Mutate(Action<PowerQuotaConfig> mutator)
+    {
+        ArgumentNullException.ThrowIfNull(mutator);
+        lock (_lock)
+        {
+            var clone = _current.Clone();
+            mutator(clone);
+            if (SaveInternal(clone))
+            {
+                _current = clone;
+            }
+            return _current.Clone();
         }
     }
 
     public void Save(PowerQuotaConfig config)
     {
+        ArgumentNullException.ThrowIfNull(config);
         lock (_lock)
         {
-            _current = config;
-            try
+            var clone = config.Clone();
+            if (SaveInternal(clone))
             {
-                Directory.CreateDirectory(StorageDirectory);
-                var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(ConfigFilePath, json);
+                _current = clone;
             }
-            catch (Exception ex)
+        }
+    }
+
+    public PowerQuotaConfig Reload()
+    {
+        lock (_lock)
+        {
+            _current = Load();
+            return _current.Clone();
+        }
+    }
+
+    private bool SaveInternal(PowerQuotaConfig config)
+    {
+        var dir = Path.GetDirectoryName(_configFilePath);
+        if (!string.IsNullOrEmpty(dir))
+        {
+            Directory.CreateDirectory(dir);
+        }
+
+        var tempFile = Path.Combine(
+            string.IsNullOrEmpty(dir) ? "." : dir,
+            $"{Path.GetFileName(_configFilePath)}.{Guid.NewGuid():N}.tmp"
+        );
+
+        try
+        {
+            var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(tempFile, json);
+            File.Move(tempFile, _configFilePath, overwrite: true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota Config] Save error: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            if (File.Exists(tempFile))
             {
-                System.Diagnostics.Debug.WriteLine($"[PowerQuota Config] Save error: {ex.Message}");
+                try { File.Delete(tempFile); } catch { }
             }
         }
     }
 
     private PowerQuotaConfig Load()
     {
-        if (!File.Exists(ConfigFilePath)) return new PowerQuotaConfig();
+        if (!File.Exists(_configFilePath)) return new PowerQuotaConfig();
         try
         {
-            var json = File.ReadAllText(ConfigFilePath);
+            var json = File.ReadAllText(_configFilePath);
             return JsonSerializer.Deserialize<PowerQuotaConfig>(json) ?? new PowerQuotaConfig();
         }
-        catch
+        catch (Exception ex)
         {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota Config] Load error: {ex.Message}");
             return new PowerQuotaConfig();
         }
     }
 }
-

@@ -39,13 +39,11 @@ public class SettingsFormPage : ListPage
                 {
                     new SettingChoice("Percentage", "Display percentage text (e.g. 76% left)", cur.DockDisplayMode == DockDisplayMode.Percentage, () =>
                     {
-                        cur.DockDisplayMode = DockDisplayMode.Percentage;
-                        Save(cur);
+                        UpdateSetting(cfg => cfg.DockDisplayMode = DockDisplayMode.Percentage);
                     }),
                     new SettingChoice("Usage Bars", "Display visual progress bars (e.g. ▰▰▰▰▰▰▱▱)", cur.DockDisplayMode == DockDisplayMode.Bars, () =>
                     {
-                        cur.DockDisplayMode = DockDisplayMode.Bars;
-                        Save(cur);
+                        UpdateSetting(cfg => cfg.DockDisplayMode = DockDisplayMode.Bars);
                     })
                 };
             }
@@ -69,13 +67,11 @@ public class SettingsFormPage : ListPage
                 {
                     new SettingChoice("Remaining Quota (e.g. 76% left)", "Display how much quota is available", cur.DisplayRemainingNotUsed, () =>
                     {
-                        cur.DisplayRemainingNotUsed = true;
-                        Save(cur);
+                        UpdateSetting(cfg => cfg.DisplayRemainingNotUsed = true);
                     }),
                     new SettingChoice("Used Quota (e.g. 24% used)", "Display how much quota has been consumed", !cur.DisplayRemainingNotUsed, () =>
                     {
-                        cur.DisplayRemainingNotUsed = false;
-                        Save(cur);
+                        UpdateSetting(cfg => cfg.DisplayRemainingNotUsed = false);
                     })
                 };
             }
@@ -99,13 +95,11 @@ public class SettingsFormPage : ListPage
                 {
                     new SettingChoice("Relative Countdown (e.g. in 2h 15m)", "Show dynamic countdown until quota resets", cur.ShowRelativeResetTimes, () =>
                     {
-                        cur.ShowRelativeResetTimes = true;
-                        Save(cur);
+                        UpdateSetting(cfg => cfg.ShowRelativeResetTimes = true);
                     }),
                     new SettingChoice("Absolute Clock Time (e.g. Friday at 2:00 PM)", "Show local clock time when quota resets", !cur.ShowRelativeResetTimes, () =>
                     {
-                        cur.ShowRelativeResetTimes = false;
-                        Save(cur);
+                        UpdateSetting(cfg => cfg.ShowRelativeResetTimes = false);
                     })
                 };
             }
@@ -126,11 +120,11 @@ public class SettingsFormPage : ListPage
                 var cur = _configStorage.Current;
                 return new[]
                 {
-                    new SettingChoice("Every 1 Minute", "Poll provider APIs every minute", cur.RefreshIntervalMinutes == 1, () => { cur.RefreshIntervalMinutes = 1; Save(cur); }),
-                    new SettingChoice("Every 5 Minutes", "Poll provider APIs every 5 minutes", cur.RefreshIntervalMinutes == 5, () => { cur.RefreshIntervalMinutes = 5; Save(cur); }),
-                    new SettingChoice("Every 15 Minutes", "Poll provider APIs every 15 minutes (recommended)", cur.RefreshIntervalMinutes == 15, () => { cur.RefreshIntervalMinutes = 15; Save(cur); }),
-                    new SettingChoice("Every 30 Minutes", "Poll provider APIs every 30 minutes", cur.RefreshIntervalMinutes == 30, () => { cur.RefreshIntervalMinutes = 30; Save(cur); }),
-                    new SettingChoice("Every 60 Minutes", "Poll provider APIs every 60 minutes", cur.RefreshIntervalMinutes == 60, () => { cur.RefreshIntervalMinutes = 60; Save(cur); })
+                    new SettingChoice("Every 1 Minute", "Poll provider APIs every minute", cur.RefreshIntervalMinutes == 1, () => UpdateSetting(cfg => cfg.RefreshIntervalMinutes = 1)),
+                    new SettingChoice("Every 5 Minutes", "Poll provider APIs every 5 minutes", cur.RefreshIntervalMinutes == 5, () => UpdateSetting(cfg => cfg.RefreshIntervalMinutes = 5)),
+                    new SettingChoice("Every 15 Minutes", "Poll provider APIs every 15 minutes (recommended)", cur.RefreshIntervalMinutes == 15, () => UpdateSetting(cfg => cfg.RefreshIntervalMinutes = 15)),
+                    new SettingChoice("Every 30 Minutes", "Poll provider APIs every 30 minutes", cur.RefreshIntervalMinutes == 30, () => UpdateSetting(cfg => cfg.RefreshIntervalMinutes = 30)),
+                    new SettingChoice("Every 60 Minutes", "Poll provider APIs every 60 minutes", cur.RefreshIntervalMinutes == 60, () => UpdateSetting(cfg => cfg.RefreshIntervalMinutes = 60))
                 };
             }
         );
@@ -145,9 +139,9 @@ public class SettingsFormPage : ListPage
         return items.ToArray();
     }
 
-    private void Save(PowerQuotaConfig config)
+    private void UpdateSetting(Action<PowerQuotaConfig> update)
     {
-        _configStorage.Save(config);
+        _configStorage.Mutate(update);
         RaiseItemsChanged(GetItems().Length);
         _refreshService.NotifyStateChanged();
     }

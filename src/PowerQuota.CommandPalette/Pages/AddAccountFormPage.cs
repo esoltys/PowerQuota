@@ -59,21 +59,22 @@ public class AddAccountFormPage : ListPage
 
     private void AutoScanOrConnect(ProviderId provider)
     {
-        var config = _configStorage.Current;
-        var existing = config.Accounts.FirstOrDefault(a => a.Provider == provider);
-        if (existing == null)
+        _configStorage.Mutate(config =>
         {
-            var newAccount = new AccountConfig
+            var existing = config.Accounts.FirstOrDefault(a => a.Provider == provider);
+            if (existing == null)
             {
-                Provider = provider,
-                Label = $"{provider.GetLabel()} Quota",
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            };
+                var newAccount = new AccountConfig
+                {
+                    Provider = provider,
+                    Label = $"{provider.GetLabel()} Quota",
+                    CreatedAt = DateTimeOffset.UtcNow,
+                    UpdatedAt = DateTimeOffset.UtcNow
+                };
 
-            config.Accounts.Add(newAccount);
-            _configStorage.Save(config);
-        }
+                config.Accounts.Add(newAccount);
+            }
+        });
         _ = _refreshService.RefreshProviderAsync(provider);
     }
 }

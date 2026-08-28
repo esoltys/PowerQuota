@@ -79,12 +79,12 @@ public class StorageAndEngineTests : IDisposable
     [Fact]
     public void PowerQuotaCommandProvider_TopLevelCommands_And_DockBands_HaveStableIds()
     {
-        _storage.Current.Accounts.Add(new AccountConfig
+        _storage.Mutate(c => c.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
-        });
+        }));
 
         var refreshService = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
         var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(_storage, _vault, refreshService);
@@ -110,12 +110,12 @@ public class StorageAndEngineTests : IDisposable
     [Fact]
     public void PowerQuotaCommandProvider_GetCommandItem_ResolvesByExactId_Prefix_And_Title()
     {
-        _storage.Current.Accounts.Add(new AccountConfig
+        _storage.Mutate(c => c.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
-        });
+        }));
 
         var refreshService = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
         var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(_storage, _vault, refreshService);
@@ -163,6 +163,63 @@ public class StorageAndEngineTests : IDisposable
     }
 
     [Fact]
+    public void ConfigStorage_Current_ReturnsIsolatedClone()
+    {
+        var storage = new ConfigStorage(_testDir);
+        var snapshot1 = storage.Current;
+        snapshot1.RefreshIntervalMinutes = 999;
+        snapshot1.Accounts.Add(new AccountConfig { Id = "ghost-account", Provider = ProviderId.Claude });
+
+        var snapshot2 = storage.Current;
+        Assert.NotEqual(999, snapshot2.RefreshIntervalMinutes);
+        Assert.DoesNotContain(snapshot2.Accounts, a => a.Id == "ghost-account");
+    }
+
+    [Fact]
+    public void ConfigStorage_Mutate_CoordinatesConcurrentUpdatesWithoutDataLoss()
+    {
+        var storage = new ConfigStorage(_testDir);
+        const int threadCount = 30;
+
+        Parallel.For(0, threadCount, i =>
+        {
+            storage.Mutate(cfg =>
+            {
+                cfg.Accounts.Add(new AccountConfig
+                {
+                    Id = $"acc-{i}",
+                    Provider = ProviderId.Claude,
+                    Label = $"Account {i}"
+                });
+            });
+        });
+
+        Assert.Equal(threadCount, storage.Current.Accounts.Count);
+
+        var reloaded = new ConfigStorage(_testDir);
+        Assert.Equal(threadCount, reloaded.Current.Accounts.Count);
+    }
+
+    [Fact]
+    public void ConfigStorage_AtomicPersistence_CleansUpTempFilesAndPreservesValidConfig()
+    {
+        var storage = new ConfigStorage(_testDir);
+        storage.Mutate(cfg =>
+        {
+            cfg.RefreshIntervalMinutes = 10;
+            cfg.Accounts.Add(new AccountConfig { Id = "test-1", Provider = ProviderId.Gemini });
+        });
+
+        Assert.True(File.Exists(_storage.ConfigFilePath));
+        var tmpFiles = Directory.GetFiles(_testDir, "*.tmp");
+        Assert.Empty(tmpFiles);
+
+        var loaded = new ConfigStorage(_testDir);
+        Assert.Equal(10, loaded.Current.RefreshIntervalMinutes);
+        Assert.Single(loaded.Current.Accounts);
+    }
+
+    [Fact]
     public void QuotaRefreshService_InitializesStateForAllProviders()
     {
         using var service = new QuotaRefreshService(_storage, _vault);
@@ -177,5 +234,23 @@ public class StorageAndEngineTests : IDisposable
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Minimax);
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Kimi);
     }
-}
 
+    [Fact]
+    public void PowerQuotaExtension_GetProvider_ReturnsCommandProvider_AndHandlesLoggingSafely()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        var provider = extension.GetProvider(Microsoft.CommandPalette.Extensions.ProviderType.Commands);
+        Assert.NotNull(provider);
+
+        var nullProvider = extension.GetProvider((Microsoft.CommandPalette.Extensions.ProviderType)999);
+        Assert.Null(nullProvider);
+    }
+
+    [Fact]
+    public void PowerQuotaExtension_Dispose_SignalsDisposedEvent()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        extension.Dispose();
+        Assert.True(PowerQuota.CommandPalette.PowerQuotaExtension.DisposedEvent.WaitOne(0));
+    }
+}

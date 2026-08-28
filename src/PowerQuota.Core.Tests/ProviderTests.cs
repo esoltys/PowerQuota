@@ -698,6 +698,272 @@ public class ProviderTests
         Assert.Equal("abab7-chat (Weekly)", snapshot.Windows[1].Label);
         Assert.Equal(50.0f, snapshot.Windows[1].UsedPercent);
     }
+
+    private class TrackingContent : StringContent
+    {
+        public bool IsDisposed { get; private set; }
+
+        public TrackingContent(string content) : base(content, System.Text.Encoding.UTF8, "application/json") { }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                IsDisposed = true;
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    private class MockHttpMessageHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
+        public List<TrackingContent> ReturnedContents { get; } = new();
+        public List<HttpRequestMessage> ReceivedRequests { get; } = new();
+
+        public MockHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
+        {
+            _handler = handler;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            ReceivedRequests.Add(request);
+            var response = _handler(request);
+            if (response.Content is TrackingContent tc)
+            {
+                ReturnedContents.Add(tc);
+            }
+            return Task.FromResult(response);
+        }
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-claude", Provider = ProviderId.Claude };
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "test-token" });
+
+        // 1. Success
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new TrackingContent("""{"five_hour":{"utilization":10.0}}""")
+        });
+        using var client = new HttpClient(handler);
+        var provider = new ClaudeProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Single(handler.ReturnedContents);
+        Assert.True(handler.ReturnedContents[0].IsDisposed);
+
+        // 2. 401 Unauthorized
+        var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+        {
+            Content = new TrackingContent("Unauthorized")
+        });
+        using var unauthClient = new HttpClient(unauthHandler);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
+        Assert.Single(unauthHandler.ReturnedContents);
+        Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task CursorProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-cursor", Provider = ProviderId.Cursor };
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "test-token" });
+
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new TrackingContent("""{"gpt4":{"numRequests":10,"maxRequestUsage":100}}""")
+        });
+        using var client = new HttpClient(handler);
+        var provider = new CursorProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Single(handler.ReturnedContents);
+        Assert.True(handler.ReturnedContents[0].IsDisposed);
+
+        var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+        {
+            Content = new TrackingContent("Unauthorized")
+        });
+        using var unauthClient = new HttpClient(unauthHandler);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
+        Assert.Single(unauthHandler.ReturnedContents);
+        Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task KimiProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-kimi", Provider = ProviderId.Kimi };
+        vault.SaveApiKey(account.Id, "sk-test-key");
+
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new TrackingContent("""{"usage":{"limit":100,"used":20}}""")
+        });
+        using var client = new HttpClient(handler);
+        var provider = new KimiProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Single(handler.ReturnedContents);
+        Assert.True(handler.ReturnedContents[0].IsDisposed);
+
+        var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+        {
+            Content = new TrackingContent("Unauthorized")
+        });
+        using var unauthClient = new HttpClient(unauthHandler);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
+        Assert.Single(unauthHandler.ReturnedContents);
+        Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task MinimaxProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-minimax", Provider = ProviderId.Minimax };
+        vault.SaveApiKey(account.Id, "sk-test-key");
+
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new TrackingContent("""{"model_remains":[{"model_name":"abab","current_interval_remaining_percent":80}]}""")
+        });
+        using var client = new HttpClient(handler);
+        var provider = new MinimaxProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Single(handler.ReturnedContents);
+        Assert.True(handler.ReturnedContents[0].IsDisposed);
+
+        var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+        {
+            Content = new TrackingContent("Unauthorized")
+        });
+        using var unauthClient = new HttpClient(unauthHandler);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
+        Assert.Single(unauthHandler.ReturnedContents);
+        Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task GeminiProvider_FetchAsync_DisposesBothLoadAndQuotaResponses()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-gemini", Provider = ProviderId.Gemini };
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "test-token" });
+
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.ToString().Contains("loadCodeAssist"))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new TrackingContent("""{"cloudaicompanionProject":"proj-123","currentTier":{"id":"free-tier"}}""")
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"buckets":[{"modelId":"flash","remainingFraction":0.8}]}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+        var provider = new GeminiProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Equal(2, handler.ReturnedContents.Count);
+        Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+    }
+
+    [Fact]
+    public async Task CopilotProvider_FetchAsync_DisposesResponses_DuringFallbackRetry()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-copilot", Provider = ProviderId.Copilot };
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "test-token" });
+
+        int attempt = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            attempt++;
+            if (attempt == 1)
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.UpgradeRequired)
+                {
+                    Content = new TrackingContent("Upgrade Required")
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"login":"user","access_type_sku":"individual","quota_snapshots":{"chat":{"entitlement":100,"remaining":50}}}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+        var provider = new CopilotProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Equal(2, handler.ReturnedContents.Count);
+        Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+    }
+
+    [Fact]
+    public async Task CodexProvider_FetchAsync_DisposesResponses_DuringReactive401OAuthRefresh()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-codex", Provider = ProviderId.Codex };
+        var (scannedAt, _, _) = HostCliScanner.ScanCodexTokens();
+        var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "expired-token";
+
+        vault.SaveTokens(account.Id, new StoredTokens
+        {
+            AccessToken = initialToken,
+            RefreshToken = "valid-refresh-token",
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1) // not expired proactively
+        });
+
+        int usageAttempts = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.ToString().Contains("oauth/token"))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new TrackingContent("""{"access_token":"new-access-token","expires_in":3600}""")
+                };
+            }
+            usageAttempts++;
+            if (usageAttempts == 1)
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+                {
+                    Content = new TrackingContent("Unauthorized")
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"account_id":"acc-1","plan_type":"plus","rate_limit":{"primary_window":{"used_percent":20.0}}}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+        var provider = new CodexProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Equal(3, handler.ReturnedContents.Count); // 1st usage (401), token refresh (200), 2nd usage (200)
+        Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+    }
 }
 
 
