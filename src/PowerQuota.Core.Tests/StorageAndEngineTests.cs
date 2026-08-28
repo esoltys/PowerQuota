@@ -300,6 +300,26 @@ public class StorageAndEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task QuotaRefreshService_DoesNotDispose_CallerProvidedHttpClient()
+    {
+        var handler = new DisposableTrackingHandler();
+        var httpClient = new HttpClient(handler);
+
+        var service = new QuotaRefreshService(_storage, _vault, httpClient, autoStartTimer: false);
+        service.Dispose();
+
+        // The handler and HttpClient should not have been disposed by QuotaRefreshService
+        Assert.False(handler.IsDisposed);
+
+        // Caller should still be able to issue requests through the client
+        var response = await httpClient.GetAsync("https://example.com");
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+
+        httpClient.Dispose();
+        Assert.True(handler.IsDisposed);
+    }
+
+    [Fact]
     public async Task QuotaRefreshService_PreventsOverlappingRefreshes_SerializesExecution()
     {
         _storage.Mutate(cfg =>
@@ -616,6 +636,25 @@ public class StorageAndEngineTests : IDisposable
         var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
         extension.Dispose();
         Assert.True(PowerQuota.CommandPalette.PowerQuotaExtension.DisposedEvent.WaitOne(0));
+    }
+
+    private class DisposableTrackingHandler : HttpMessageHandler
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                IsDisposed = true;
+            }
+            base.Dispose(disposing);
+        }
     }
 
     private class ConcurrencyTestingAdapter : PowerQuota.Core.Providers.IProviderAdapter
