@@ -29,24 +29,34 @@ public class CopilotProvider : IProviderAdapter
             }
         }
 
-        var request = CreateCopilotRequest(tokens.AccessToken, "vscode/1.107.0", "copilot-chat/0.35.0");
-        var response = await client.SendAsync(request, ct);
+        async Task<(System.Net.HttpStatusCode StatusCode, string? Json)> SendCopilotRequestAsync(string editorVer, string pluginVer, bool allowFallbackStatus)
+        {
+            using var request = CreateCopilotRequest(tokens.AccessToken, editorVer, pluginVer);
+            using var response = await client.SendAsync(request, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                throw new UnauthorizedAccessException("GitHub Copilot session expired");
+            }
+
+            if (allowFallbackStatus && (response.StatusCode == System.Net.HttpStatusCode.BadRequest || response.StatusCode == System.Net.HttpStatusCode.UpgradeRequired))
+            {
+                return (response.StatusCode, null);
+            }
+
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(ct);
+            return (response.StatusCode, json);
+        }
+
+        var (statusCode, json) = await SendCopilotRequestAsync("vscode/1.107.0", "copilot-chat/0.35.0", allowFallbackStatus: true);
 
         // Header fallback if rejected with client error
-        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest || response.StatusCode == System.Net.HttpStatusCode.UpgradeRequired)
+        if (json == null && (statusCode == System.Net.HttpStatusCode.BadRequest || statusCode == System.Net.HttpStatusCode.UpgradeRequired))
         {
-            request = CreateCopilotRequest(tokens.AccessToken, "vscode/1.108.0", "copilot-chat/0.36.0");
-            response = await client.SendAsync(request, ct);
+            (_, json) = await SendCopilotRequestAsync("vscode/1.108.0", "copilot-chat/0.36.0", allowFallbackStatus: false);
         }
 
-        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-        {
-            throw new UnauthorizedAccessException("GitHub Copilot session expired");
-        }
-
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseUsage(json, account);
+        return ParseUsage(json!, account);
     }
 
     private static HttpRequestMessage CreateCopilotRequest(string token, string editorVersion, string pluginVersion)

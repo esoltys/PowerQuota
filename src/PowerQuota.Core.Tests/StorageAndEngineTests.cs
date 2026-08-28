@@ -42,13 +42,12 @@ public class StorageAndEngineTests
     public void PowerQuotaCommandProvider_TopLevelCommands_And_DockBands_HaveStableIds()
     {
         var storage = new ConfigStorage();
-        storage.Current.Accounts.Clear();
-        storage.Current.Accounts.Add(new AccountConfig
+        storage.Mutate(c => c.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
-        });
+        }));
 
         var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
         var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
@@ -75,13 +74,12 @@ public class StorageAndEngineTests
     public void PowerQuotaCommandProvider_GetCommandItem_ResolvesByExactId_Prefix_And_Title()
     {
         var storage = new ConfigStorage();
-        storage.Current.Accounts.Clear();
-        storage.Current.Accounts.Add(new AccountConfig
+        storage.Mutate(c => c.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
-        });
+        }));
 
         var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
         var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
@@ -114,19 +112,109 @@ public class StorageAndEngineTests
     [Fact]
     public void ConfigStorage_LoadsAndSavesSettings()
     {
-        var storage = new ConfigStorage();
-        var cfg = storage.Current;
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            var cfg = storage.Current;
 
-        cfg.RefreshIntervalMinutes = 15;
-        cfg.DisplayRemainingNotUsed = true;
-        cfg.DockDisplayMode = DockDisplayMode.PercentageOnly;
+            cfg.RefreshIntervalMinutes = 15;
+            cfg.DisplayRemainingNotUsed = true;
+            cfg.DockDisplayMode = DockDisplayMode.PercentageOnly;
 
-        storage.Save(cfg);
+            storage.Save(cfg);
 
-        var reloaded = new ConfigStorage();
-        Assert.Equal(15, reloaded.Current.RefreshIntervalMinutes);
-        Assert.True(reloaded.Current.DisplayRemainingNotUsed);
-        Assert.Equal(DockDisplayMode.PercentageOnly, reloaded.Current.DockDisplayMode);
+            var reloaded = new ConfigStorage(tempFile);
+            Assert.Equal(15, reloaded.Current.RefreshIntervalMinutes);
+            Assert.True(reloaded.Current.DisplayRemainingNotUsed);
+            Assert.Equal(DockDisplayMode.PercentageOnly, reloaded.Current.DockDisplayMode);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigStorage_Current_ReturnsIsolatedClone()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            var snapshot1 = storage.Current;
+            snapshot1.RefreshIntervalMinutes = 999;
+            snapshot1.Accounts.Add(new AccountConfig { Id = "ghost-account", Provider = ProviderId.Claude });
+
+            var snapshot2 = storage.Current;
+            Assert.NotEqual(999, snapshot2.RefreshIntervalMinutes);
+            Assert.DoesNotContain(snapshot2.Accounts, a => a.Id == "ghost-account");
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigStorage_Mutate_CoordinatesConcurrentUpdatesWithoutDataLoss()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            const int threadCount = 30;
+
+            Parallel.For(0, threadCount, i =>
+            {
+                storage.Mutate(cfg =>
+                {
+                    cfg.Accounts.Add(new AccountConfig
+                    {
+                        Id = $"acc-{i}",
+                        Provider = ProviderId.Claude,
+                        Label = $"Account {i}"
+                    });
+                });
+            });
+
+            Assert.Equal(threadCount, storage.Current.Accounts.Count);
+
+            var reloaded = new ConfigStorage(tempFile);
+            Assert.Equal(threadCount, reloaded.Current.Accounts.Count);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigStorage_AtomicPersistence_CleansUpTempFilesAndPreservesValidConfig()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"pq_dir_{Guid.NewGuid():N}");
+        var tempFile = Path.Combine(tempDir, "config.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            storage.Mutate(cfg =>
+            {
+                cfg.RefreshIntervalMinutes = 10;
+                cfg.Accounts.Add(new AccountConfig { Id = "test-1", Provider = ProviderId.Gemini });
+            });
+
+            Assert.True(File.Exists(tempFile));
+            var tmpFiles = Directory.GetFiles(tempDir, "*.tmp");
+            Assert.Empty(tmpFiles);
+
+            var loaded = new ConfigStorage(tempFile);
+            Assert.Equal(10, loaded.Current.RefreshIntervalMinutes);
+            Assert.Single(loaded.Current.Accounts);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
@@ -151,81 +239,133 @@ public class StorageAndEngineTests
     [Fact]
     public async Task QuotaRefreshService_PreventsOverlappingRefreshes_SerializesExecution()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Current.Accounts.Clear();
-        configStorage.Current.Accounts.Add(new AccountConfig
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
         {
-            Id = "acc-claude-concurrency",
-            Provider = ProviderId.Claude,
-            Label = "Claude Concurrency Test"
-        });
+            var configStorage = new ConfigStorage(tempFile);
+            configStorage.Mutate(cfg =>
+            {
+                cfg.Accounts.Clear();
+                cfg.Accounts.Add(new AccountConfig
+                {
+                    Id = "acc-claude-concurrency",
+                    Provider = ProviderId.Claude,
+                    Label = "Claude Concurrency Test"
+                });
+            });
 
-        var slowAdapter = new ConcurrencyTestingAdapter(ProviderId.Claude, delayMs: 80);
-        using var service = new QuotaRefreshService(configStorage, new WindowsCredentialVault(), autoStartTimer: false);
-        service.RegisterAdapter(slowAdapter);
+            var slowAdapter = new ConcurrencyTestingAdapter(ProviderId.Claude, delayMs: 80);
+            using var service = new QuotaRefreshService(configStorage, new WindowsCredentialVault(), autoStartTimer: false);
+            service.RegisterAdapter(slowAdapter);
 
-        // Launch multiple concurrent refreshes
-        var task1 = service.RefreshAllAsync();
-        var task2 = service.RefreshProviderAsync(ProviderId.Claude);
-        var task3 = service.RefreshAllAsync();
-        var task4 = service.RefreshProviderAsync(ProviderId.Claude);
+            // Launch multiple concurrent refreshes
+            var task1 = service.RefreshAllAsync();
+            var task2 = service.RefreshProviderAsync(ProviderId.Claude);
+            var task3 = service.RefreshAllAsync();
+            var task4 = service.RefreshProviderAsync(ProviderId.Claude);
 
-        await Task.WhenAll(task1, task2, task3, task4);
+            await Task.WhenAll(task1, task2, task3, task4);
 
-        // Max concurrent refresh executions must never exceed 1
-        Assert.Equal(1, slowAdapter.MaxConcurrent);
-        Assert.Equal(4, slowAdapter.TotalInvocations);
+            // Max concurrent refresh executions must never exceed 1
+            Assert.Equal(1, slowAdapter.MaxConcurrent);
+            Assert.Equal(4, slowAdapter.TotalInvocations);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 
     [Fact]
     public async Task QuotaRefreshService_Disposal_CancelsInFlightWorkCleanly()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Current.Accounts.Clear();
-        configStorage.Current.Accounts.Add(new AccountConfig
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
         {
-            Id = "acc-claude-cancel",
-            Provider = ProviderId.Claude,
-            Label = "Claude Cancel Test"
-        });
+            var configStorage = new ConfigStorage(tempFile);
+            configStorage.Mutate(cfg =>
+            {
+                cfg.Accounts.Clear();
+                cfg.Accounts.Add(new AccountConfig
+                {
+                    Id = "acc-claude-cancel",
+                    Provider = ProviderId.Claude,
+                    Label = "Claude Cancel Test"
+                });
+            });
 
-        var slowAdapter = new ConcurrencyTestingAdapter(ProviderId.Claude, delayMs: 1000);
-        var service = new QuotaRefreshService(configStorage, new WindowsCredentialVault(), autoStartTimer: false);
-        service.RegisterAdapter(slowAdapter);
+            var slowAdapter = new ConcurrencyTestingAdapter(ProviderId.Claude, delayMs: 1000);
+            var service = new QuotaRefreshService(configStorage, new WindowsCredentialVault(), autoStartTimer: false);
+            service.RegisterAdapter(slowAdapter);
 
-        var refreshTask = service.RefreshAllAsync();
-        await Task.Delay(50); // Let refresh start and acquire lock
+            var refreshTask = service.RefreshAllAsync();
+            await Task.Delay(50); // Let refresh start and acquire lock
 
-        service.Dispose();
+            service.Dispose();
 
-        // Should complete without throwing unhandled exceptions
-        await refreshTask;
+            // Should complete without throwing unhandled exceptions
+            await refreshTask;
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 
     [Fact]
     public async Task QuotaRefreshService_ObservesExceptionsSafely_WithoutCrashing()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Current.Accounts.Clear();
-        configStorage.Current.Accounts.Add(new AccountConfig
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
         {
-            Id = "acc-failing",
-            Provider = ProviderId.Claude,
-            Label = "Failing Adapter Test"
-        });
+            var configStorage = new ConfigStorage(tempFile);
+            configStorage.Mutate(cfg =>
+            {
+                cfg.Accounts.Clear();
+                cfg.Accounts.Add(new AccountConfig
+                {
+                    Id = "acc-failing",
+                    Provider = ProviderId.Claude,
+                    Label = "Failing Adapter Test"
+                });
+            });
 
-        var failingAdapter = new FailingTestingAdapter(ProviderId.Claude);
-        using var service = new QuotaRefreshService(configStorage, new WindowsCredentialVault(), autoStartTimer: false);
-        service.RegisterAdapter(failingAdapter);
+            var failingAdapter = new FailingTestingAdapter(ProviderId.Claude);
+            using var service = new QuotaRefreshService(configStorage, new WindowsCredentialVault(), autoStartTimer: false);
+            service.RegisterAdapter(failingAdapter);
 
-        // Both calls should complete gracefully and not throw unhandled exception
-        await service.RefreshProviderAsync(ProviderId.Claude);
-        await service.RefreshAllAsync();
+            // Both calls should complete gracefully and not throw unhandled exception
+            await service.RefreshProviderAsync(ProviderId.Claude);
+            await service.RefreshAllAsync();
 
-        var accState = service.State.ProviderAccounts.FirstOrDefault(a => a.AccountId == "acc-failing");
-        Assert.NotNull(accState);
-        Assert.Equal(ProviderHealth.Error, accState!.Health);
-        Assert.Contains("Simulated network failure", accState.Error);
+            var accState = service.State.ProviderAccounts.FirstOrDefault(a => a.AccountId == "acc-failing");
+            Assert.NotNull(accState);
+            Assert.Equal(ProviderHealth.Error, accState!.Health);
+            Assert.Contains("Simulated network failure", accState.Error);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void PowerQuotaExtension_GetProvider_ReturnsCommandProvider_AndHandlesLoggingSafely()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        var provider = extension.GetProvider(Microsoft.CommandPalette.Extensions.ProviderType.Commands);
+        Assert.NotNull(provider);
+
+        var nullProvider = extension.GetProvider((Microsoft.CommandPalette.Extensions.ProviderType)999);
+        Assert.Null(nullProvider);
+    }
+
+    [Fact]
+    public void PowerQuotaExtension_Dispose_SignalsDisposedEvent()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        extension.Dispose();
+        Assert.True(PowerQuota.CommandPalette.PowerQuotaExtension.DisposedEvent.WaitOne(0));
     }
 
     private class ConcurrencyTestingAdapter : PowerQuota.Core.Providers.IProviderAdapter
@@ -299,4 +439,3 @@ public class StorageAndEngineTests
         }
     }
 }
-
