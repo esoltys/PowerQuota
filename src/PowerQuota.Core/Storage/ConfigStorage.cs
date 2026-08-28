@@ -14,15 +14,25 @@ public class ConfigStorage
     private readonly object _lock = new();
     private PowerQuotaConfig _current;
 
-    public ConfigStorage(string? configFilePath = null)
+    public string StorageDirectory => Path.GetDirectoryName(_configFilePath) ?? DefaultStorageDir;
+    public string ConfigFilePath => _configFilePath;
+
+    public ConfigStorage(string? customPath = null)
     {
-        _configFilePath = !string.IsNullOrWhiteSpace(configFilePath)
-            ? configFilePath
-            : DefaultConfigFile;
+        if (string.IsNullOrWhiteSpace(customPath))
+        {
+            _configFilePath = DefaultConfigFile;
+        }
+        else if (Directory.Exists(customPath) || !customPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            _configFilePath = Path.Combine(customPath, "config.json");
+        }
+        else
+        {
+            _configFilePath = customPath;
+        }
         _current = Load();
     }
-
-    public string ConfigFilePath => _configFilePath;
 
     public PowerQuotaConfig Current
     {
@@ -121,4 +131,3 @@ public class ConfigStorage
         }
     }
 }
-

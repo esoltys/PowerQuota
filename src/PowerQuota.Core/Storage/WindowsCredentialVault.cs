@@ -14,18 +14,24 @@ public class StoredTokens
 
 public class WindowsCredentialVault
 {
-    private static readonly string StorageDir = Path.Combine(
+    public static readonly string DefaultStorageDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PowerQuota"
     );
-    private static readonly string VaultFile = Path.Combine(StorageDir, "vault.dat");
+
+    public string StorageDirectory { get; }
+    public string VaultFilePath { get; }
 
     private readonly Dictionary<string, StoredTokens> _tokens = new();
     private readonly Dictionary<string, string> _apiKeys = new();
     private readonly object _lock = new();
 
-    public WindowsCredentialVault()
+    public WindowsCredentialVault(string? customDirectoryPath = null)
     {
+        StorageDirectory = !string.IsNullOrWhiteSpace(customDirectoryPath)
+            ? customDirectoryPath
+            : DefaultStorageDir;
+        VaultFilePath = Path.Combine(StorageDirectory, "vault.dat");
         Load();
     }
 
@@ -77,7 +83,7 @@ public class WindowsCredentialVault
     {
         try
         {
-            Directory.CreateDirectory(StorageDir);
+            Directory.CreateDirectory(StorageDirectory);
             var payload = new VaultPayload
             {
                 Tokens = _tokens,
@@ -86,7 +92,7 @@ public class WindowsCredentialVault
             var json = JsonSerializer.Serialize(payload);
             var rawBytes = Encoding.UTF8.GetBytes(json);
             var encryptedBytes = ProtectedData.Protect(rawBytes, null, DataProtectionScope.CurrentUser);
-            File.WriteAllBytes(VaultFile, encryptedBytes);
+            File.WriteAllBytes(VaultFilePath, encryptedBytes);
         }
         catch (Exception ex)
         {
@@ -98,10 +104,10 @@ public class WindowsCredentialVault
     {
         lock (_lock)
         {
-            if (!File.Exists(VaultFile)) return;
+            if (!File.Exists(VaultFilePath)) return;
             try
             {
-                var encryptedBytes = File.ReadAllBytes(VaultFile);
+                var encryptedBytes = File.ReadAllBytes(VaultFilePath);
                 var rawBytes = ProtectedData.Unprotect(encryptedBytes, null, DataProtectionScope.CurrentUser);
                 var json = Encoding.UTF8.GetString(rawBytes);
                 var payload = JsonSerializer.Deserialize<VaultPayload>(json);
