@@ -20,11 +20,11 @@ public class MinimaxProvider : IProviderAdapter
             throw new InvalidOperationException("Minimax API Key required");
         }
 
-        var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
+        using var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        var response = await client.SendAsync(request, ct);
+        using var response = await client.SendAsync(request, ct);
         if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
         {
             throw new UnauthorizedAccessException("Invalid Minimax API key");
