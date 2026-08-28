@@ -76,11 +76,23 @@ public class CodexProvider : IProviderAdapter
             }
         }
 
-        var request = CreateUsageRequest(tokens.AccessToken, effectiveAccountId);
-        var response = await client.SendAsync(request, ct);
+        async Task<(System.Net.HttpStatusCode StatusCode, string? Json)> SendUsageRequestAsync(string accessToken)
+        {
+            using var request = CreateUsageRequest(accessToken, effectiveAccountId);
+            using var response = await client.SendAsync(request, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                return (response.StatusCode, null);
+            }
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(ct);
+            return (response.StatusCode, json);
+        }
+
+        var (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
 
         // Reactive token refresh on 401 Unauthorized
-        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        if (statusCode == System.Net.HttpStatusCode.Unauthorized)
         {
             // First check if host scanner has a fresh token on disk
             var (freshAt, freshRt, freshExp) = HostCliScanner.ScanCodexTokens();
@@ -90,31 +102,27 @@ public class CodexProvider : IProviderAdapter
                 tokens.RefreshToken = freshRt ?? tokens.RefreshToken;
                 tokens.ExpiresAt = freshExp ?? HostCliScanner.ExtractJwtExpiration(freshAt);
                 vault.SaveTokens(account.Id, tokens);
-                request = CreateUsageRequest(tokens.AccessToken, effectiveAccountId);
-                response = await client.SendAsync(request, ct);
+                (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
             }
 
             // If still unauthorized, try OAuth refresh token
-            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(tokens.RefreshToken))
+            if (statusCode == System.Net.HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(tokens.RefreshToken))
             {
                 var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
                 if (refreshed != null)
                 {
                     tokens = refreshed;
-                    request = CreateUsageRequest(tokens.AccessToken, effectiveAccountId);
-                    response = await client.SendAsync(request, ct);
+                    (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
                 }
             }
         }
 
-        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        if (statusCode == System.Net.HttpStatusCode.Unauthorized || statusCode == System.Net.HttpStatusCode.Forbidden || usageJson == null)
         {
             throw new UnauthorizedAccessException("Codex session expired or unauthorized");
         }
 
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseUsage(json, account);
+        return ParseUsage(usageJson, account);
     }
 
     private static HttpRequestMessage CreateUsageRequest(string accessToken, string? accountId)
@@ -134,7 +142,7 @@ public class CodexProvider : IProviderAdapter
 
         try
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
+            using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
             {
                 Content = new FormUrlEncodedContent(new Dictionary<string, string>
                 {
@@ -144,7 +152,7 @@ public class CodexProvider : IProviderAdapter
                 })
             };
 
-            var response = await client.SendAsync(request, ct);
+            using var response = await client.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode) return null;
 
             var json = await response.Content.ReadAsStringAsync(ct);

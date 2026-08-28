@@ -53,8 +53,17 @@ public class PowerQuotaCommandProvider : CommandProvider
 
     public override ICommandItem[] TopLevelCommands()
     {
-        var logPath = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "PowerQuota", "extension.log");
-        System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] TopLevelCommands called\n");
+        try
+        {
+            var dir = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData), "PowerQuota");
+            System.IO.Directory.CreateDirectory(dir);
+            var logPath = System.IO.Path.Combine(dir, "extension.log");
+            System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] TopLevelCommands called\n");
+        }
+        catch
+        {
+            // Diagnostic logging failures should never prevent command generation.
+        }
 
         var commands = new List<ICommandItem>();
         var config = _configStorage.Current;

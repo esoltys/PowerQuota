@@ -109,8 +109,13 @@ public class QuotaRefreshService : IDisposable
             var autoAccount = TryAutoDiscoverAccount(provider);
             if (autoAccount != null)
             {
-                config.Accounts.Add(autoAccount);
-                _configStorage.Save(config);
+                _configStorage.Mutate(cfg =>
+                {
+                    if (!cfg.Accounts.Any(a => a.Id == autoAccount.Id || (a.Provider == autoAccount.Provider && a.Label == autoAccount.Label)))
+                    {
+                        cfg.Accounts.Add(autoAccount);
+                    }
+                });
                 accounts.Add(autoAccount);
             }
         }
