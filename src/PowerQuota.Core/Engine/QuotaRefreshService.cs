@@ -94,8 +94,61 @@ public class QuotaRefreshService : IDisposable
         }
     }
 
+    public void RemoveAccount(string accountId)
+    {
+        lock (_stateLock)
+        {
+            State.ProviderAccounts.RemoveAll(a => a.AccountId == accountId);
+
+            var remainingConfigured = _configStorage.Current.Accounts.Where(a => a.Id != accountId).ToList();
+            foreach (var pState in State.Providers)
+            {
+                var providerAccounts = remainingConfigured.Where(a => a.Provider == pState.Provider).ToList();
+                if (pState.SystemActiveAccountId == accountId)
+                {
+                    pState.SystemActiveAccountId = null;
+                }
+                if (pState.ActiveAccountId == accountId)
+                {
+                    pState.ActiveAccountId = pState.SystemActiveAccountId ?? providerAccounts.FirstOrDefault()?.Id;
+                }
+            }
+            State.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        StateChanged?.Invoke(this, State);
+    }
+
+    public void ReconcileAccounts()
+    {
+        lock (_stateLock)
+        {
+            var configuredAccounts = _configStorage.Current.Accounts;
+            var configuredAccountIds = configuredAccounts.Select(a => a.Id).ToHashSet();
+            State.ProviderAccounts.RemoveAll(a => !configuredAccountIds.Contains(a.AccountId));
+
+            foreach (var pState in State.Providers)
+            {
+                var providerAccounts = configuredAccounts.Where(a => a.Provider == pState.Provider).ToList();
+                if (pState.SystemActiveAccountId != null && !providerAccounts.Any(a => a.Id == pState.SystemActiveAccountId))
+                {
+                    pState.SystemActiveAccountId = null;
+                }
+                if (pState.ActiveAccountId != null && !providerAccounts.Any(a => a.Id == pState.ActiveAccountId))
+                {
+                    pState.ActiveAccountId = pState.SystemActiveAccountId ?? providerAccounts.FirstOrDefault()?.Id;
+                }
+            }
+            State.UpdatedAt = DateTimeOffset.UtcNow;
+        }
+
+        StateChanged?.Invoke(this, State);
+    }
+
     public async Task RefreshAllAsync(CancellationToken ct = default)
     {
+        ReconcileAccounts();
+
         var config = _configStorage.Current;
         var tasks = new List<Task>();
 
@@ -141,6 +194,13 @@ public class QuotaRefreshService : IDisposable
             }
         }
 
+        // Clean up orphaned runtime states for this provider that are no longer configured
+        lock (_stateLock)
+        {
+            var currentAccountIds = accounts.Select(a => a.Id).ToHashSet();
+            State.ProviderAccounts.RemoveAll(a => a.Provider == provider && !currentAccountIds.Contains(a.AccountId));
+        }
+
         string? systemActiveId = null;
         try
         {
@@ -150,6 +210,12 @@ public class QuotaRefreshService : IDisposable
 
         foreach (var account in accounts)
         {
+            // If the account was removed while refresh was running, skip it
+            if (!_configStorage.Current.Accounts.Any(a => a.Id == account.Id))
+            {
+                continue;
+            }
+
             ProviderAccountRuntimeState accountState;
             lock (_stateLock)
             {
@@ -220,11 +286,15 @@ public class QuotaRefreshService : IDisposable
 
         lock (_stateLock)
         {
+            var currentConfigured = _configStorage.Current.Accounts.Where(a => a.Provider == provider).ToList();
+            var currentConfiguredIds = currentConfigured.Select(a => a.Id).ToHashSet();
+            State.ProviderAccounts.RemoveAll(a => a.Provider == provider && !currentConfiguredIds.Contains(a.AccountId));
+
             var pState = State.Providers.FirstOrDefault(p => p.Provider == provider);
             if (pState != null)
             {
-                pState.SystemActiveAccountId = systemActiveId;
-                pState.ActiveAccountId = systemActiveId ?? accounts.FirstOrDefault()?.Id;
+                pState.SystemActiveAccountId = systemActiveId != null && currentConfiguredIds.Contains(systemActiveId) ? systemActiveId : null;
+                pState.ActiveAccountId = pState.SystemActiveAccountId ?? currentConfigured.FirstOrDefault()?.Id;
             }
             State.UpdatedAt = DateTimeOffset.UtcNow;
         }
