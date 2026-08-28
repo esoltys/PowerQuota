@@ -194,6 +194,20 @@ public class GeminiProvider : IProviderAdapter
                     }
                 }
             }
+
+            // Ensure 5-Hour session limit is placed before Weekly limit
+            windows.Sort((a, b) =>
+            {
+                bool aIsGemini = a.Label.StartsWith("Gemini", StringComparison.OrdinalIgnoreCase);
+                bool bIsGemini = b.Label.StartsWith("Gemini", StringComparison.OrdinalIgnoreCase);
+                if (aIsGemini != bIsGemini) return aIsGemini ? -1 : 1;
+
+                bool aIs5h = a.Label.Contains("5h", StringComparison.OrdinalIgnoreCase);
+                bool bIs5h = b.Label.Contains("5h", StringComparison.OrdinalIgnoreCase);
+                if (aIs5h != bIs5h) return aIs5h ? -1 : 1;
+
+                return string.Compare(a.Label, b.Label, StringComparison.OrdinalIgnoreCase);
+            });
         }
         else if (root.TryGetProperty("buckets", out var legacyBuckets) && legacyBuckets.ValueKind == JsonValueKind.Array)
         {

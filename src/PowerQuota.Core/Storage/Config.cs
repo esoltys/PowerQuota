@@ -75,6 +75,9 @@ public class PowerQuotaConfig
     [JsonPropertyName("enabled_providers")]
     public HashSet<ProviderId> EnabledProviders { get; set; } = new(Enum.GetValues<ProviderId>());
 
+    [JsonPropertyName("gemini_include_third_party_models")]
+    public bool GeminiIncludeThirdPartyModels { get; set; } = false;
+
     public PowerQuotaConfig Clone() => new()
     {
         RefreshIntervalMinutes = RefreshIntervalMinutes,
@@ -82,7 +85,8 @@ public class PowerQuotaConfig
         ShowRelativeResetTimes = ShowRelativeResetTimes,
         DockDisplayMode = DockDisplayMode,
         Accounts = Accounts.Select(a => a.Clone()).ToList(),
-        EnabledProviders = new HashSet<ProviderId>(EnabledProviders)
+        EnabledProviders = new HashSet<ProviderId>(EnabledProviders),
+        GeminiIncludeThirdPartyModels = GeminiIncludeThirdPartyModels
     };
 }
 

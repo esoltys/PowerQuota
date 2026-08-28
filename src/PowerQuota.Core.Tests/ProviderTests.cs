@@ -343,14 +343,14 @@ public class ProviderTests
 
         Assert.Equal(ProviderId.Gemini, snapshot.Provider);
         Assert.Equal(4, snapshot.Windows.Count);
-        Assert.Equal("Gemini (Weekly)", snapshot.Windows[0].Label);
-        Assert.Equal(45.66f, snapshot.Windows[0].UsedPercent, 1);
-        Assert.Equal("Gemini (5h)", snapshot.Windows[1].Label);
-        Assert.Equal(75.40f, snapshot.Windows[1].UsedPercent, 1);
-        Assert.Equal("Claude/GPT (Weekly)", snapshot.Windows[2].Label);
-        Assert.Equal(33.04f, snapshot.Windows[2].UsedPercent, 1);
-        Assert.Equal("Claude/GPT (5h)", snapshot.Windows[3].Label);
-        Assert.Equal(0.0f, snapshot.Windows[3].UsedPercent, 1);
+        Assert.Equal("Gemini (5h)", snapshot.Windows[0].Label);
+        Assert.Equal(75.40f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Equal("Gemini (Weekly)", snapshot.Windows[1].Label);
+        Assert.Equal(45.66f, snapshot.Windows[1].UsedPercent, 1);
+        Assert.Equal("Claude/GPT (5h)", snapshot.Windows[2].Label);
+        Assert.Equal(0.0f, snapshot.Windows[2].UsedPercent, 1);
+        Assert.Equal("Claude/GPT (Weekly)", snapshot.Windows[3].Label);
+        Assert.Equal(33.04f, snapshot.Windows[3].UsedPercent, 1);
         Assert.Equal("Google AI Pro", snapshot.Identity.Plan);
     }
 

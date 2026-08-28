@@ -222,6 +222,11 @@ public class PowerQuotaCommandProvider : CommandProvider
                 {
                     foreach (var window in snapshot.Windows)
                     {
+                        if (pid == ProviderId.Gemini && !config.GeminiIncludeThirdPartyModels && window.Label.StartsWith("Claude/GPT", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         float percent = config.DisplayRemainingNotUsed ? Math.Clamp(100f - window.UsedPercent, 0f, 100f) : window.UsedPercent;
                         string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
 
