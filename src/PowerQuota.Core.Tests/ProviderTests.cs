@@ -343,11 +343,15 @@ public class ProviderTests
 
         Assert.Equal(ProviderId.Gemini, snapshot.Provider);
         Assert.Equal(4, snapshot.Windows.Count);
-        Assert.Equal("Gemini (5h)", snapshot.Windows[0].Label);
+        Assert.Equal("Session", snapshot.Windows[0].Label);
+        Assert.Equal("5-hour session window", snapshot.Windows[0].ResetDescription);
+        Assert.Equal(5 * 3600, snapshot.Windows[0].WindowSeconds);
         Assert.Equal(75.40f, snapshot.Windows[0].UsedPercent, 1);
-        Assert.Equal("Gemini (Weekly)", snapshot.Windows[1].Label);
+        Assert.Equal("Weekly", snapshot.Windows[1].Label);
+        Assert.Equal("Weekly quota", snapshot.Windows[1].ResetDescription);
+        Assert.Equal(7 * 24 * 3600, snapshot.Windows[1].WindowSeconds);
         Assert.Equal(45.66f, snapshot.Windows[1].UsedPercent, 1);
-        Assert.Equal("Claude/GPT (5h)", snapshot.Windows[2].Label);
+        Assert.Equal("Claude/GPT (Session)", snapshot.Windows[2].Label);
         Assert.Equal(0.0f, snapshot.Windows[2].UsedPercent, 1);
         Assert.Equal("Claude/GPT (Weekly)", snapshot.Windows[3].Label);
         Assert.Equal(33.04f, snapshot.Windows[3].UsedPercent, 1);
@@ -660,7 +664,7 @@ public class ProviderTests
                 var snapshot = await provider.FetchAsync(account, vault, client);
                 Assert.Equal(ProviderId.Gemini, snapshot.Provider);
                 Assert.NotEmpty(snapshot.Windows);
-                Assert.Contains(snapshot.Windows, w => w.Label.Contains("Gemini"));
+                Assert.Contains(snapshot.Windows, w => w.Label == "Session" || w.Label == "Weekly" || w.Label.Contains("Gemini"));
             }
             finally
             {
@@ -1119,7 +1123,7 @@ public class ProviderTests
         Assert.NotNull(snapshot);
         Assert.Equal("Google AI Pro", snapshot.Identity.Plan);
         Assert.Single(snapshot.Windows);
-        Assert.Equal("Gemini (5h)", snapshot.Windows[0].Label);
+        Assert.Equal("Session", snapshot.Windows[0].Label);
         Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
     }
 }
