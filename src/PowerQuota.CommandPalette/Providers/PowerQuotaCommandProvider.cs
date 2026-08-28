@@ -222,7 +222,10 @@ public class PowerQuotaCommandProvider : CommandProvider
                 {
                     foreach (var window in snapshot.Windows)
                     {
-                        if (pid == ProviderId.Gemini && !config.GeminiIncludeThirdPartyModels && window.Label.StartsWith("Claude/GPT", StringComparison.OrdinalIgnoreCase))
+                        if (pid == ProviderId.Gemini && !config.GeminiIncludeThirdPartyModels &&
+                            (window.Label.StartsWith("Claude/GPT", StringComparison.OrdinalIgnoreCase) ||
+                             window.Label.StartsWith("Claude", StringComparison.OrdinalIgnoreCase) ||
+                             window.Label.StartsWith("GPT", StringComparison.OrdinalIgnoreCase)))
                         {
                             continue;
                         }
@@ -345,8 +348,8 @@ public class PowerQuotaCommandProvider : CommandProvider
             (id.EndsWith(c.Command.Id, StringComparison.OrdinalIgnoreCase) || c.Command.Id.EndsWith(id, StringComparison.OrdinalIgnoreCase)));
         if (match != null) return match;
 
-        // 3. Fallback: match by Title
-        return allItems.FirstOrDefault(c => c.Title.Contains(id, StringComparison.OrdinalIgnoreCase) || id.Contains(c.Title, StringComparison.OrdinalIgnoreCase));
+        // 3. Exact match on Title
+        return allItems.FirstOrDefault(c => string.Equals(c.Title, id, StringComparison.OrdinalIgnoreCase));
     }
 
     public override ICommand? GetCommand(string id)

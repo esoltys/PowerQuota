@@ -47,7 +47,8 @@ if ($Register) {
                         for ($i = 0; $i -lt $bandArr.Count; $i++) {
                             $item = $bandArr[$i]
                             $cid = $item["CommandId"]?.GetValue[string]()
-                            if ($cid -and ($cid -match "PowerQuota-CommandPalette\d+")) {
+                            $pvd = $item["ProviderId"]?.GetValue[string]()
+                            if ($cid -and ($cid -match "PowerQuota-CommandPalette\d+" -or $cid -match "dock-.*-status" -or $cid -match "dock-Gemini-.*-Gemini-" -or ($pvd -and $pvd -match "PowerQuota" -and ($cid -match "3c57b67|2bc7354|70c4b0f|57dd447")))) {
                                 $toRemove.Add($item)
                             }
                         }

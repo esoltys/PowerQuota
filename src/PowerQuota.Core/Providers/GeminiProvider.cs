@@ -147,6 +147,7 @@ public class GeminiProvider : IProviderAdapter
                 {
                     foreach (var bucket in buckets.EnumerateArray())
                     {
+                        string bucketId = bucket.TryGetProperty("bucketId", out var bi) ? bi.GetString() ?? "" : "";
                         string bucketWindow = bucket.TryGetProperty("window", out var bw) ? bw.GetString() ?? "" : "";
                         string bucketDisplayName = bucket.TryGetProperty("displayName", out var bdn) ? bdn.GetString() ?? "" : "";
                         string? description = bucket.TryGetProperty("description", out var bd) ? bd.GetString() : null;
@@ -159,17 +160,20 @@ public class GeminiProvider : IProviderAdapter
                             resetTime = parsedRt;
                         }
 
-                        string windowSuffix = bucketWindow.Equals("5h", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Five Hour", StringComparison.OrdinalIgnoreCase)
+                        string windowSuffix = bucketWindow.Equals("5h", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Five Hour", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("5h", StringComparison.OrdinalIgnoreCase)
                             ? "5h"
-                            : bucketWindow.Equals("weekly", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Weekly", StringComparison.OrdinalIgnoreCase)
+                            : bucketWindow.Equals("weekly", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Weekly", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("weekly", StringComparison.OrdinalIgnoreCase)
                                 ? "Weekly"
                                 : bucketWindow;
+
+                        bool is3p = isClaudeGptGroup || bucketId.Contains("3p", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("claude", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("gpt", StringComparison.OrdinalIgnoreCase);
+                        bool isGemini = (isGeminiGroup || bucketId.Contains("gemini", StringComparison.OrdinalIgnoreCase)) && !is3p;
 
                         string label;
                         string resetDesc;
                         long? windowSeconds = null;
 
-                        if (isGeminiGroup)
+                        if (isGemini)
                         {
                             if (windowSuffix == "5h")
                             {
@@ -189,7 +193,7 @@ public class GeminiProvider : IProviderAdapter
                                 resetDesc = string.IsNullOrEmpty(description) ? $"Gemini {windowSuffix} Quota" : description;
                             }
                         }
-                        else if (isClaudeGptGroup)
+                        else if (is3p)
                         {
                             if (windowSuffix == "5h")
                             {
