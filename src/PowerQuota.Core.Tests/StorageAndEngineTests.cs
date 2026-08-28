@@ -42,12 +42,12 @@ public class StorageAndEngineTests
     public void PowerQuotaCommandProvider_TopLevelCommands_And_DockBands_HaveStableIds()
     {
         var storage = new ConfigStorage();
-        storage.Current.Accounts.Add(new AccountConfig
+        storage.Mutate(c => c.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
-        });
+        }));
 
         var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
         var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
@@ -74,12 +74,12 @@ public class StorageAndEngineTests
     public void PowerQuotaCommandProvider_GetCommandItem_ResolvesByExactId_Prefix_And_Title()
     {
         var storage = new ConfigStorage();
-        storage.Current.Accounts.Add(new AccountConfig
+        storage.Mutate(c => c.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
-        });
+        }));
 
         var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
         var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
@@ -112,19 +112,109 @@ public class StorageAndEngineTests
     [Fact]
     public void ConfigStorage_LoadsAndSavesSettings()
     {
-        var storage = new ConfigStorage();
-        var cfg = storage.Current;
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            var cfg = storage.Current;
 
-        cfg.RefreshIntervalMinutes = 15;
-        cfg.DisplayRemainingNotUsed = true;
-        cfg.DockDisplayMode = DockDisplayMode.PercentageOnly;
+            cfg.RefreshIntervalMinutes = 15;
+            cfg.DisplayRemainingNotUsed = true;
+            cfg.DockDisplayMode = DockDisplayMode.PercentageOnly;
 
-        storage.Save(cfg);
+            storage.Save(cfg);
 
-        var reloaded = new ConfigStorage();
-        Assert.Equal(15, reloaded.Current.RefreshIntervalMinutes);
-        Assert.True(reloaded.Current.DisplayRemainingNotUsed);
-        Assert.Equal(DockDisplayMode.PercentageOnly, reloaded.Current.DockDisplayMode);
+            var reloaded = new ConfigStorage(tempFile);
+            Assert.Equal(15, reloaded.Current.RefreshIntervalMinutes);
+            Assert.True(reloaded.Current.DisplayRemainingNotUsed);
+            Assert.Equal(DockDisplayMode.PercentageOnly, reloaded.Current.DockDisplayMode);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigStorage_Current_ReturnsIsolatedClone()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            var snapshot1 = storage.Current;
+            snapshot1.RefreshIntervalMinutes = 999;
+            snapshot1.Accounts.Add(new AccountConfig { Id = "ghost-account", Provider = ProviderId.Claude });
+
+            var snapshot2 = storage.Current;
+            Assert.NotEqual(999, snapshot2.RefreshIntervalMinutes);
+            Assert.DoesNotContain(snapshot2.Accounts, a => a.Id == "ghost-account");
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigStorage_Mutate_CoordinatesConcurrentUpdatesWithoutDataLoss()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            const int threadCount = 30;
+
+            Parallel.For(0, threadCount, i =>
+            {
+                storage.Mutate(cfg =>
+                {
+                    cfg.Accounts.Add(new AccountConfig
+                    {
+                        Id = $"acc-{i}",
+                        Provider = ProviderId.Claude,
+                        Label = $"Account {i}"
+                    });
+                });
+            });
+
+            Assert.Equal(threadCount, storage.Current.Accounts.Count);
+
+            var reloaded = new ConfigStorage(tempFile);
+            Assert.Equal(threadCount, reloaded.Current.Accounts.Count);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigStorage_AtomicPersistence_CleansUpTempFilesAndPreservesValidConfig()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"pq_dir_{Guid.NewGuid():N}");
+        var tempFile = Path.Combine(tempDir, "config.json");
+        try
+        {
+            var storage = new ConfigStorage(tempFile);
+            storage.Mutate(cfg =>
+            {
+                cfg.RefreshIntervalMinutes = 10;
+                cfg.Accounts.Add(new AccountConfig { Id = "test-1", Provider = ProviderId.Gemini });
+            });
+
+            Assert.True(File.Exists(tempFile));
+            var tmpFiles = Directory.GetFiles(tempDir, "*.tmp");
+            Assert.Empty(tmpFiles);
+
+            var loaded = new ConfigStorage(tempFile);
+            Assert.Equal(10, loaded.Current.RefreshIntervalMinutes);
+            Assert.Single(loaded.Current.Accounts);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
     }
 
     [Fact]
@@ -149,71 +239,113 @@ public class StorageAndEngineTests
     [Fact]
     public void QuotaRefreshService_UpdateRefreshInterval_UpdatesIntervalWithoutRecreatingService()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Current.RefreshIntervalMinutes = 5;
-        var vault = new WindowsCredentialVault();
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var configStorage = new ConfigStorage(tempFile);
+            configStorage.Mutate(cfg => cfg.RefreshIntervalMinutes = 5);
+            var vault = new WindowsCredentialVault();
 
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: true);
+            using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: true);
 
-        Assert.Equal(5, service.RefreshIntervalMinutes);
+            Assert.Equal(5, service.RefreshIntervalMinutes);
 
-        service.UpdateRefreshInterval(15);
-        Assert.Equal(15, service.RefreshIntervalMinutes);
+            service.UpdateRefreshInterval(15);
+            Assert.Equal(15, service.RefreshIntervalMinutes);
 
-        service.UpdateRefreshInterval(1);
-        Assert.Equal(1, service.RefreshIntervalMinutes);
+            service.UpdateRefreshInterval(1);
+            Assert.Equal(1, service.RefreshIntervalMinutes);
 
-        // Clamping check: <= 0 should clamp to 1 minute
-        service.UpdateRefreshInterval(0);
-        Assert.Equal(1, service.RefreshIntervalMinutes);
+            // Clamping check: <= 0 should clamp to 1 minute
+            service.UpdateRefreshInterval(0);
+            Assert.Equal(1, service.RefreshIntervalMinutes);
 
-        service.UpdateRefreshInterval(-5);
-        Assert.Equal(1, service.RefreshIntervalMinutes);
+            service.UpdateRefreshInterval(-5);
+            Assert.Equal(1, service.RefreshIntervalMinutes);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 
     [Fact]
     public void QuotaRefreshService_UpdateRefreshInterval_SafeWhenTimerDisabledOrDisposed()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Current.RefreshIntervalMinutes = 5;
-        var vault = new WindowsCredentialVault();
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var configStorage = new ConfigStorage(tempFile);
+            configStorage.Mutate(cfg => cfg.RefreshIntervalMinutes = 5);
+            var vault = new WindowsCredentialVault();
 
-        var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
-        service.UpdateRefreshInterval(30);
-        Assert.Equal(30, service.RefreshIntervalMinutes);
+            var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+            service.UpdateRefreshInterval(30);
+            Assert.Equal(30, service.RefreshIntervalMinutes);
 
-        service.Dispose();
-        // Calling update on disposed service does not throw ObjectDisposedException
-        service.UpdateRefreshInterval(60);
-        Assert.Equal(60, service.RefreshIntervalMinutes);
+            service.Dispose();
+            // Calling update on disposed service does not throw ObjectDisposedException
+            service.UpdateRefreshInterval(60);
+            Assert.Equal(60, service.RefreshIntervalMinutes);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
     }
 
     [Fact]
     public void SettingsFormPage_IntervalSelection_UpdatesRefreshServiceAndConfig()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Current.RefreshIntervalMinutes = 5;
-        var vault = new WindowsCredentialVault();
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
-        var settingsPage = new PowerQuota.CommandPalette.Pages.SettingsFormPage(configStorage, service);
+        var tempFile = Path.Combine(Path.GetTempPath(), $"pq_test_{Guid.NewGuid():N}.json");
+        try
+        {
+            var configStorage = new ConfigStorage(tempFile);
+            configStorage.Mutate(cfg => cfg.RefreshIntervalMinutes = 5);
+            var vault = new WindowsCredentialVault();
+            using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+            var settingsPage = new PowerQuota.CommandPalette.Pages.SettingsFormPage(configStorage, service);
 
-        var items = settingsPage.GetItems();
-        var intervalItem = items.FirstOrDefault(i => i.Title == "Auto-Refresh Interval");
-        Assert.NotNull(intervalItem);
+            var items = settingsPage.GetItems();
+            var intervalItem = items.FirstOrDefault(i => i.Title == "Auto-Refresh Interval");
+            Assert.NotNull(intervalItem);
 
-        var choicePage = intervalItem!.Command as PowerQuota.CommandPalette.Pages.SettingChoicePage;
-        Assert.NotNull(choicePage);
+            var choicePage = intervalItem!.Command as PowerQuota.CommandPalette.Pages.SettingChoicePage;
+            Assert.NotNull(choicePage);
 
-        var choices = choicePage!.GetItems();
-        var thirtyMinChoice = choices.FirstOrDefault(c => c.Title == "Every 30 Minutes");
-        Assert.NotNull(thirtyMinChoice);
+            var choices = choicePage!.GetItems();
+            var thirtyMinChoice = choices.FirstOrDefault(c => c.Title == "Every 30 Minutes");
+            Assert.NotNull(thirtyMinChoice);
 
-        var command = thirtyMinChoice!.Command as Microsoft.CommandPalette.Extensions.Toolkit.AnonymousCommand;
-        Assert.NotNull(command);
-        command!.Invoke();
+            var command = thirtyMinChoice!.Command as Microsoft.CommandPalette.Extensions.Toolkit.AnonymousCommand;
+            Assert.NotNull(command);
+            command!.Invoke();
 
-        Assert.Equal(30, service.RefreshIntervalMinutes);
-        Assert.Equal(30, configStorage.Current.RefreshIntervalMinutes);
+            Assert.Equal(30, service.RefreshIntervalMinutes);
+            Assert.Equal(30, configStorage.Current.RefreshIntervalMinutes);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public void PowerQuotaExtension_GetProvider_ReturnsCommandProvider_AndHandlesLoggingSafely()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        var provider = extension.GetProvider(Microsoft.CommandPalette.Extensions.ProviderType.Commands);
+        Assert.NotNull(provider);
+
+        var nullProvider = extension.GetProvider((Microsoft.CommandPalette.Extensions.ProviderType)999);
+        Assert.Null(nullProvider);
+    }
+
+    [Fact]
+    public void PowerQuotaExtension_Dispose_SignalsDisposedEvent()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        extension.Dispose();
+        Assert.True(PowerQuota.CommandPalette.PowerQuotaExtension.DisposedEvent.WaitOne(0));
     }
 }
-

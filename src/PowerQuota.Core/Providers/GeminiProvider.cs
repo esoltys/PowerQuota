@@ -28,25 +28,28 @@ public class GeminiProvider : IProviderAdapter
             }
         }
 
-        // Step 1: Load code assist to get active project and tier
-        var loadReq = new HttpRequestMessage(HttpMethod.Post, LoadCodeAssistUrl);
-        loadReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
-        loadReq.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-
-        var loadResp = await client.SendAsync(loadReq, ct);
-        if (loadResp.StatusCode == System.Net.HttpStatusCode.Unauthorized || loadResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
-        {
-            throw new UnauthorizedAccessException("Gemini session expired");
-        }
-
-        loadResp.EnsureSuccessStatusCode();
-        var loadJson = await loadResp.Content.ReadAsStringAsync(ct);
-        using var loadDoc = JsonDocument.Parse(loadJson);
-
         string? project = null;
         string? tier = null;
-        if (loadDoc.RootElement.TryGetProperty("cloudaicompanionProject", out var cp)) project = cp.GetString();
-        if (loadDoc.RootElement.TryGetProperty("currentTier", out var ctObj) && ctObj.TryGetProperty("id", out var tid)) tier = tid.GetString();
+
+        // Step 1: Load code assist to get active project and tier
+        using (var loadReq = new HttpRequestMessage(HttpMethod.Post, LoadCodeAssistUrl))
+        {
+            loadReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+            loadReq.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+            using var loadResp = await client.SendAsync(loadReq, ct);
+            if (loadResp.StatusCode == System.Net.HttpStatusCode.Unauthorized || loadResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                throw new UnauthorizedAccessException("Gemini session expired");
+            }
+
+            loadResp.EnsureSuccessStatusCode();
+            var loadJson = await loadResp.Content.ReadAsStringAsync(ct);
+            using var loadDoc = JsonDocument.Parse(loadJson);
+
+            if (loadDoc.RootElement.TryGetProperty("cloudaicompanionProject", out var cp)) project = cp.GetString();
+            if (loadDoc.RootElement.TryGetProperty("currentTier", out var ctObj) && ctObj.TryGetProperty("id", out var tid)) tier = tid.GetString();
+        }
 
         if (string.IsNullOrEmpty(project))
         {
@@ -55,11 +58,15 @@ public class GeminiProvider : IProviderAdapter
 
         // Step 2: Retrieve quota buckets
         var quotaUrl = string.Format(RetrieveQuotaUrl, project);
-        var quotaReq = new HttpRequestMessage(HttpMethod.Post, quotaUrl);
+        using var quotaReq = new HttpRequestMessage(HttpMethod.Post, quotaUrl);
         quotaReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
         quotaReq.Content = new StringContent($"{{\"project\":\"{project}\"}}", System.Text.Encoding.UTF8, "application/json");
 
-        var quotaResp = await client.SendAsync(quotaReq, ct);
+        using var quotaResp = await client.SendAsync(quotaReq, ct);
+        if (quotaResp.StatusCode == System.Net.HttpStatusCode.Unauthorized || quotaResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        {
+            throw new UnauthorizedAccessException("Gemini session expired");
+        }
         quotaResp.EnsureSuccessStatusCode();
         var quotaJson = await quotaResp.Content.ReadAsStringAsync(ct);
 
