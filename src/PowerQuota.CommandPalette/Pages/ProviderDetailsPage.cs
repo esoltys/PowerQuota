@@ -161,8 +161,10 @@ public class ProviderDetailsPage : ListPage
                         },
                         new CommandContextItem(new AnonymousCommand(() =>
                         {
-                            config.Accounts.RemoveAll(a => a.Id == acc.AccountId);
-                            _configStorage.Save(config);
+                            _configStorage.Mutate(cfg =>
+                            {
+                                cfg.Accounts.RemoveAll(a => a.Id == acc.AccountId);
+                            });
                             _vault.RemoveAccount(acc.AccountId);
                             _refreshService.RemoveAccount(acc.AccountId);
                         }))
