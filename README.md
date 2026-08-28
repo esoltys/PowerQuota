@@ -25,7 +25,7 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
 |:---:|:---:|
 | ![Provider Details](docs/command-palette.png) | ![PowerQuota Overview](docs/overview.png) |
 
-| PowerToys Dock Integration | Live Reset Tooltips |
+| PowerToys Dock Integration | Percentage or Usage Bars |
 |:---:|:---:|
 | ![PowerToys Dock Cards](docs/dock-01.png) | ![Dock Tooltips](docs/dock-02.png) |
 
