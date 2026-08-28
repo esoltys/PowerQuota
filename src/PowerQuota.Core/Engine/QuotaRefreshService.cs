@@ -12,7 +12,10 @@ public class QuotaRefreshService : IDisposable
     private readonly HttpClient _httpClient;
     private readonly Dictionary<ProviderId, IProviderAdapter> _adapters = new();
     private readonly Timer? _timer;
+    private readonly SemaphoreSlim _refreshLock = new(1, 1);
+    private readonly CancellationTokenSource _cts = new();
     private readonly object _stateLock = new();
+    private bool _disposed;
 
     public AppState State { get; private set; } = new();
     public event EventHandler<AppState>? StateChanged;
@@ -44,12 +47,11 @@ public class QuotaRefreshService : IDisposable
 
         if (autoStartTimer)
         {
-            int intervalMs = Math.Max(1, _configStorage.Current.RefreshIntervalMinutes) * 60 * 1000;
-            _timer = new Timer(async _ => await RefreshAllAsync(), null, 1000, intervalMs);
+            _timer = new Timer(OnTimerTick, null, 1000, Timeout.Infinite);
         }
     }
 
-    private void RegisterAdapter(IProviderAdapter adapter)
+    internal void RegisterAdapter(IProviderAdapter adapter)
     {
         _adapters[adapter.Id] = adapter;
     }
@@ -71,27 +73,153 @@ public class QuotaRefreshService : IDisposable
         }
     }
 
-    public async Task RefreshAllAsync(CancellationToken ct = default)
+    private async void OnTimerTick(object? state)
     {
-        var config = _configStorage.Current;
-        var tasks = new List<Task>();
+        if (_disposed || _cts.IsCancellationRequested) return;
 
-        foreach (var pid in ProviderIdExtensions.All)
+        try
         {
-            if (config.EnabledProviders.Contains(pid))
+            await RefreshAllAsync(_cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during shutdown
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota Timer] Background refresh failed: {ex}");
+        }
+        finally
+        {
+            if (!_disposed && !_cts.IsCancellationRequested)
             {
-                tasks.Add(RefreshProviderInternalAsync(pid, ct));
+                try
+                {
+                    int intervalMs = Math.Max(1, _configStorage.Current.RefreshIntervalMinutes) * 60 * 1000;
+                    _timer?.Change(intervalMs, Timeout.Infinite);
+                }
+                catch (ObjectDisposedException)
+                {
+                }
             }
         }
+    }
 
-        await Task.WhenAll(tasks);
-        StateChanged?.Invoke(this, State);
+    public async Task RefreshAllAsync(CancellationToken ct = default)
+    {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
+        var token = linkedCts.Token;
+
+        try
+        {
+            await _refreshLock.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested && ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        try
+        {
+            if (token.IsCancellationRequested) return;
+
+            var config = _configStorage.Current;
+            var tasks = new List<Task>();
+
+            foreach (var pid in ProviderIdExtensions.All)
+            {
+                if (config.EnabledProviders.Contains(pid))
+                {
+                    tasks.Add(RefreshProviderInternalAsync(pid, token));
+                }
+            }
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+            NotifyStateChanged();
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested && ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during service cancellation or shutdown
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota RefreshAll] Error: {ex}");
+        }
+        finally
+        {
+            try
+            {
+                _refreshLock.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
     }
 
     public async Task RefreshProviderAsync(ProviderId provider, CancellationToken ct = default)
     {
-        await RefreshProviderInternalAsync(provider, ct);
-        StateChanged?.Invoke(this, State);
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
+        var token = linkedCts.Token;
+
+        try
+        {
+            await _refreshLock.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested && ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        try
+        {
+            if (token.IsCancellationRequested) return;
+
+            await RefreshProviderInternalAsync(provider, token).ConfigureAwait(false);
+            NotifyStateChanged();
+        }
+        catch (OperationCanceledException) when (!_cts.IsCancellationRequested && ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            // Normal during service cancellation or shutdown
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota RefreshProvider] Error: {ex}");
+        }
+        finally
+        {
+            try
+            {
+                _refreshLock.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+        }
     }
 
     private async Task RefreshProviderInternalAsync(ProviderId provider, CancellationToken ct = default)
@@ -107,8 +235,14 @@ public class QuotaRefreshService : IDisposable
             var autoAccount = TryAutoDiscoverAccount(provider);
             if (autoAccount != null)
             {
-                config.Accounts.Add(autoAccount);
-                _configStorage.Save(config);
+                lock (_stateLock)
+                {
+                    if (!config.Accounts.Any(a => a.Provider == provider && (a.Id == autoAccount.Id || a.Label == autoAccount.Label)))
+                    {
+                        config.Accounts.Add(autoAccount);
+                        _configStorage.Save(config);
+                    }
+                }
                 accounts.Add(autoAccount);
             }
         }
@@ -116,12 +250,18 @@ public class QuotaRefreshService : IDisposable
         string? systemActiveId = null;
         try
         {
-            systemActiveId = await adapter.GetSystemActiveAccountIdAsync(accounts, _vault);
+            systemActiveId = await adapter.GetSystemActiveAccountIdAsync(accounts, _vault).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch { }
 
         foreach (var account in accounts)
         {
+            if (ct.IsCancellationRequested) return;
+
             ProviderAccountRuntimeState accountState;
             lock (_stateLock)
             {
@@ -145,7 +285,7 @@ public class QuotaRefreshService : IDisposable
 
             try
             {
-                var snapshot = await adapter.FetchAsync(account, _vault, _httpClient, ct);
+                var snapshot = await adapter.FetchAsync(account, _vault, _httpClient, ct).ConfigureAwait(false);
                 lock (_stateLock)
                 {
                     accountState.Snapshot = snapshot;
@@ -156,6 +296,10 @@ public class QuotaRefreshService : IDisposable
                     accountState.ConsecutiveFailures = 0;
                     accountState.RetryAfter = null;
                 }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -201,46 +345,82 @@ public class QuotaRefreshService : IDisposable
             State.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
-        StateChanged?.Invoke(this, State);
+        NotifyStateChanged();
     }
 
     private AccountConfig? TryAutoDiscoverAccount(ProviderId provider)
     {
-        switch (provider)
+        try
         {
-            case ProviderId.Codex:
-                if (!string.IsNullOrEmpty(HostCliScanner.GetCodexActiveToken()))
-                    return new AccountConfig { Provider = ProviderId.Codex, Label = "Codex (CLI)" };
-                break;
-            case ProviderId.Claude:
-                if (!string.IsNullOrEmpty(HostCliScanner.GetClaudeActiveToken()))
-                    return new AccountConfig { Provider = ProviderId.Claude, Label = "Claude Code (CLI)" };
-                break;
-            case ProviderId.Cursor:
-                var (at, _) = HostCliScanner.ScanCursorIdeTokens();
-                if (!string.IsNullOrEmpty(at))
-                    return new AccountConfig { Provider = ProviderId.Cursor, Label = "Cursor (IDE)" };
-                break;
-            case ProviderId.Gemini:
-                if (!string.IsNullOrEmpty(HostCliScanner.GetGeminiActiveToken()))
-                    return new AccountConfig { Provider = ProviderId.Gemini, Label = "Gemini (CLI)" };
-                break;
-            case ProviderId.Copilot:
-                if (!string.IsNullOrEmpty(HostCliScanner.GetCopilotActiveToken()))
-                    return new AccountConfig { Provider = ProviderId.Copilot, Label = "Copilot (CLI)" };
-                break;
-            case ProviderId.Kimi:
-                if (!string.IsNullOrEmpty(HostCliScanner.GetOpenCodeKimiApiKey()))
-                    return new AccountConfig { Provider = ProviderId.Kimi, Label = "Kimi (OpenCode)" };
-                break;
+            switch (provider)
+            {
+                case ProviderId.Codex:
+                    if (!string.IsNullOrEmpty(HostCliScanner.GetCodexActiveToken()))
+                        return new AccountConfig { Provider = ProviderId.Codex, Label = "Codex (CLI)" };
+                    break;
+                case ProviderId.Claude:
+                    if (!string.IsNullOrEmpty(HostCliScanner.GetClaudeActiveToken()))
+                        return new AccountConfig { Provider = ProviderId.Claude, Label = "Claude Code (CLI)" };
+                    break;
+                case ProviderId.Cursor:
+                    var (at, _) = HostCliScanner.ScanCursorIdeTokens();
+                    if (!string.IsNullOrEmpty(at))
+                        return new AccountConfig { Provider = ProviderId.Cursor, Label = "Cursor (IDE)" };
+                    break;
+                case ProviderId.Gemini:
+                    if (!string.IsNullOrEmpty(HostCliScanner.GetGeminiActiveToken()))
+                        return new AccountConfig { Provider = ProviderId.Gemini, Label = "Gemini (CLI)" };
+                    break;
+                case ProviderId.Copilot:
+                    if (!string.IsNullOrEmpty(HostCliScanner.GetCopilotActiveToken()))
+                        return new AccountConfig { Provider = ProviderId.Copilot, Label = "Copilot (CLI)" };
+                    break;
+                case ProviderId.Kimi:
+                    if (!string.IsNullOrEmpty(HostCliScanner.GetOpenCodeKimiApiKey()))
+                        return new AccountConfig { Provider = ProviderId.Kimi, Label = "Kimi (OpenCode)" };
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PowerQuota AutoDiscover] Error for {provider}: {ex}");
         }
         return null;
     }
 
     public void Dispose()
     {
+        lock (_stateLock)
+        {
+            if (_disposed) return;
+            _disposed = true;
+        }
+
+        try
+        {
+            _cts.Cancel();
+        }
+        catch { }
+
         _timer?.Dispose();
-        _httpClient.Dispose();
+
+        try
+        {
+            _refreshLock.Dispose();
+        }
+        catch { }
+
+        try
+        {
+            _cts.Dispose();
+        }
+        catch { }
+
+        try
+        {
+            _httpClient.Dispose();
+        }
+        catch { }
     }
 }
 
