@@ -147,6 +147,7 @@ public class GeminiProvider : IProviderAdapter
                 {
                     foreach (var bucket in buckets.EnumerateArray())
                     {
+                        string bucketId = bucket.TryGetProperty("bucketId", out var bi) ? bi.GetString() ?? "" : "";
                         string bucketWindow = bucket.TryGetProperty("window", out var bw) ? bw.GetString() ?? "" : "";
                         string bucketDisplayName = bucket.TryGetProperty("displayName", out var bdn) ? bdn.GetString() ?? "" : "";
                         string? description = bucket.TryGetProperty("description", out var bd) ? bd.GetString() : null;
@@ -159,24 +160,58 @@ public class GeminiProvider : IProviderAdapter
                             resetTime = parsedRt;
                         }
 
-                        string windowSuffix = bucketWindow.Equals("5h", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Five Hour", StringComparison.OrdinalIgnoreCase)
+                        string windowSuffix = bucketWindow.Equals("5h", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Five Hour", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("5h", StringComparison.OrdinalIgnoreCase)
                             ? "5h"
-                            : bucketWindow.Equals("weekly", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Weekly", StringComparison.OrdinalIgnoreCase)
+                            : bucketWindow.Equals("weekly", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Weekly", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("weekly", StringComparison.OrdinalIgnoreCase)
                                 ? "Weekly"
                                 : bucketWindow;
 
+                        bool is3p = isClaudeGptGroup || bucketId.Contains("3p", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("claude", StringComparison.OrdinalIgnoreCase) || bucketId.Contains("gpt", StringComparison.OrdinalIgnoreCase);
+                        bool isGemini = (isGeminiGroup || bucketId.Contains("gemini", StringComparison.OrdinalIgnoreCase)) && !is3p;
+
                         string label;
                         string resetDesc;
+                        long? windowSeconds = null;
 
-                        if (isGeminiGroup)
+                        if (isGemini)
                         {
-                            label = string.IsNullOrEmpty(windowSuffix) ? "Gemini" : $"Gemini ({windowSuffix})";
-                            resetDesc = string.IsNullOrEmpty(description) ? $"Gemini {windowSuffix} Quota" : description;
+                            if (windowSuffix == "5h")
+                            {
+                                label = "Session";
+                                resetDesc = "5-hour session window";
+                                windowSeconds = 5 * 3600;
+                            }
+                            else if (windowSuffix == "Weekly")
+                            {
+                                label = "Weekly";
+                                resetDesc = "Weekly quota";
+                                windowSeconds = 7 * 24 * 3600;
+                            }
+                            else
+                            {
+                                label = string.IsNullOrEmpty(windowSuffix) ? "Gemini" : $"Gemini ({windowSuffix})";
+                                resetDesc = string.IsNullOrEmpty(description) ? $"Gemini {windowSuffix} Quota" : description;
+                            }
                         }
-                        else if (isClaudeGptGroup)
+                        else if (is3p)
                         {
-                            label = string.IsNullOrEmpty(windowSuffix) ? "Claude/GPT" : $"Claude/GPT ({windowSuffix})";
-                            resetDesc = string.IsNullOrEmpty(description) ? $"Claude & GPT {windowSuffix} Quota" : description;
+                            if (windowSuffix == "5h")
+                            {
+                                label = "Claude/GPT (Session)";
+                                resetDesc = "5-hour session window";
+                                windowSeconds = 5 * 3600;
+                            }
+                            else if (windowSuffix == "Weekly")
+                            {
+                                label = "Claude/GPT (Weekly)";
+                                resetDesc = "Weekly quota";
+                                windowSeconds = 7 * 24 * 3600;
+                            }
+                            else
+                            {
+                                label = string.IsNullOrEmpty(windowSuffix) ? "Claude/GPT" : $"Claude/GPT ({windowSuffix})";
+                                resetDesc = string.IsNullOrEmpty(description) ? $"Claude & GPT {windowSuffix} Quota" : description;
+                            }
                         }
                         else
                         {
@@ -189,22 +224,23 @@ public class GeminiProvider : IProviderAdapter
                             Label = label,
                             UsedPercent = Math.Clamp(usedPercent, 0f, 100f),
                             ResetAt = resetTime,
+                            WindowSeconds = windowSeconds,
                             ResetDescription = resetDesc
                         });
                     }
                 }
             }
 
-            // Ensure 5-Hour session limit is placed before Weekly limit
+            // Ensure Session limit is placed before Weekly limit, and Gemini group before 3P models
             windows.Sort((a, b) =>
             {
-                bool aIsGemini = a.Label.StartsWith("Gemini", StringComparison.OrdinalIgnoreCase);
-                bool bIsGemini = b.Label.StartsWith("Gemini", StringComparison.OrdinalIgnoreCase);
-                if (aIsGemini != bIsGemini) return aIsGemini ? -1 : 1;
+                bool aIs3p = a.Label.StartsWith("Claude/GPT", StringComparison.OrdinalIgnoreCase);
+                bool bIs3p = b.Label.StartsWith("Claude/GPT", StringComparison.OrdinalIgnoreCase);
+                if (aIs3p != bIs3p) return aIs3p ? 1 : -1;
 
-                bool aIs5h = a.Label.Contains("5h", StringComparison.OrdinalIgnoreCase);
-                bool bIs5h = b.Label.Contains("5h", StringComparison.OrdinalIgnoreCase);
-                if (aIs5h != bIs5h) return aIs5h ? -1 : 1;
+                bool aIsSession = a.Label.Equals("Session", StringComparison.OrdinalIgnoreCase) || a.Label.Contains("Session", StringComparison.OrdinalIgnoreCase) || a.Label.Contains("5h", StringComparison.OrdinalIgnoreCase);
+                bool bIsSession = b.Label.Equals("Session", StringComparison.OrdinalIgnoreCase) || b.Label.Contains("Session", StringComparison.OrdinalIgnoreCase) || b.Label.Contains("5h", StringComparison.OrdinalIgnoreCase);
+                if (aIsSession != bIsSession) return aIsSession ? -1 : 1;
 
                 return string.Compare(a.Label, b.Label, StringComparison.OrdinalIgnoreCase);
             });
