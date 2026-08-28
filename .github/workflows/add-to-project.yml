@@ -6,6 +6,8 @@ on:
   pull_request_target:
     types: [opened]
 
+permissions: {}
+
 jobs:
   add-to-project:
     name: Add to Project Board
