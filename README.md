@@ -19,7 +19,7 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
 
 ## Screenshots
 
-![Add to Dock](./docs/dock-03.png)
+![Add to Dock](./docs/dock-04.png)
 
 | Command Palette | Overview & Quotas |
 |:---:|:---:|
