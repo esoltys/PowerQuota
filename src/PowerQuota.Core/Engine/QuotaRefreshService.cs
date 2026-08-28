@@ -20,6 +20,7 @@ public class QuotaRefreshService : IDisposable
 
     public AppState State { get; private set; } = new();
     public event EventHandler<AppState>? StateChanged;
+    public int RefreshIntervalMinutes { get; private set; }
 
     public void NotifyStateChanged()
     {
@@ -47,9 +48,31 @@ public class QuotaRefreshService : IDisposable
 
         InitializeState();
 
+        RefreshIntervalMinutes = Math.Max(1, _configStorage.Current.RefreshIntervalMinutes);
         if (autoStartTimer)
         {
             _timer = new Timer(OnTimerTick, null, 1000, Timeout.Infinite);
+        }
+    }
+
+    public void UpdateRefreshInterval(int minutes)
+    {
+        int clampedMinutes = Math.Max(1, minutes);
+        lock (_stateLock)
+        {
+            RefreshIntervalMinutes = clampedMinutes;
+            try
+            {
+                if (_timer != null && !_disposed && !_cts.IsCancellationRequested)
+                {
+                    int intervalMs = clampedMinutes * 60 * 1000;
+                    _timer.Change(intervalMs, Timeout.Infinite);
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                // Ignore if service is being disposed or already disposed
+            }
         }
     }
 
@@ -148,7 +171,7 @@ public class QuotaRefreshService : IDisposable
             {
                 try
                 {
-                    int intervalMs = Math.Max(1, _configStorage.Current.RefreshIntervalMinutes) * 60 * 1000;
+                    int intervalMs = Math.Max(1, RefreshIntervalMinutes) * 60 * 1000;
                     _timer?.Change(intervalMs, Timeout.Infinite);
                 }
                 catch (ObjectDisposedException)

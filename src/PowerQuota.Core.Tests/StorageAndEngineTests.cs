@@ -236,6 +236,70 @@ public class StorageAndEngineTests : IDisposable
     }
 
     [Fact]
+    public void QuotaRefreshService_UpdateRefreshInterval_UpdatesIntervalWithoutRecreatingService()
+    {
+        _storage.Mutate(cfg => cfg.RefreshIntervalMinutes = 5);
+
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: true);
+
+        Assert.Equal(5, service.RefreshIntervalMinutes);
+
+        service.UpdateRefreshInterval(15);
+        Assert.Equal(15, service.RefreshIntervalMinutes);
+
+        service.UpdateRefreshInterval(1);
+        Assert.Equal(1, service.RefreshIntervalMinutes);
+
+        // Clamping check: <= 0 should clamp to 1 minute
+        service.UpdateRefreshInterval(0);
+        Assert.Equal(1, service.RefreshIntervalMinutes);
+
+        service.UpdateRefreshInterval(-5);
+        Assert.Equal(1, service.RefreshIntervalMinutes);
+    }
+
+    [Fact]
+    public void QuotaRefreshService_UpdateRefreshInterval_SafeWhenTimerDisabledOrDisposed()
+    {
+        _storage.Mutate(cfg => cfg.RefreshIntervalMinutes = 5);
+
+        var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        service.UpdateRefreshInterval(30);
+        Assert.Equal(30, service.RefreshIntervalMinutes);
+
+        service.Dispose();
+        // Calling update on disposed service does not throw ObjectDisposedException
+        service.UpdateRefreshInterval(60);
+        Assert.Equal(60, service.RefreshIntervalMinutes);
+    }
+
+    [Fact]
+    public void SettingsFormPage_IntervalSelection_UpdatesRefreshServiceAndConfig()
+    {
+        _storage.Mutate(cfg => cfg.RefreshIntervalMinutes = 5);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        var settingsPage = new PowerQuota.CommandPalette.Pages.SettingsFormPage(_storage, service);
+
+        var items = settingsPage.GetItems();
+        var intervalItem = items.FirstOrDefault(i => i.Title == "Auto-Refresh Interval");
+        Assert.NotNull(intervalItem);
+
+        var choicePage = intervalItem!.Command as PowerQuota.CommandPalette.Pages.SettingChoicePage;
+        Assert.NotNull(choicePage);
+
+        var choices = choicePage!.GetItems();
+        var thirtyMinChoice = choices.FirstOrDefault(c => c.Title == "Every 30 Minutes");
+        Assert.NotNull(thirtyMinChoice);
+
+        var command = thirtyMinChoice!.Command as Microsoft.CommandPalette.Extensions.Toolkit.AnonymousCommand;
+        Assert.NotNull(command);
+        command!.Invoke();
+
+        Assert.Equal(30, service.RefreshIntervalMinutes);
+        Assert.Equal(30, _storage.Current.RefreshIntervalMinutes);
+    }
+
+    [Fact]
     public async Task QuotaRefreshService_DoesNotDispose_CallerProvidedHttpClient()
     {
         var handler = new DisposableTrackingHandler();

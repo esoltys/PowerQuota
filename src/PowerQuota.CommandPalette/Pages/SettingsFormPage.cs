@@ -141,7 +141,8 @@ public class SettingsFormPage : ListPage
 
     private void UpdateSetting(Action<PowerQuotaConfig> update)
     {
-        _configStorage.Mutate(update);
+        var updated = _configStorage.Mutate(update);
+        _refreshService.UpdateRefreshInterval(updated.RefreshIntervalMinutes);
         RaiseItemsChanged(GetItems().Length);
         _refreshService.NotifyStateChanged();
     }
