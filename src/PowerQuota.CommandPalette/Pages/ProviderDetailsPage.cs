@@ -113,6 +113,16 @@ public class ProviderDetailsPage : ListPage
                             }))
                             {
                                 Title = "Refresh Quota"
+                            },
+                            new CommandContextItem(new AnonymousCommand(() =>
+                            {
+                                config.Accounts.RemoveAll(a => a.Id == acc.AccountId);
+                                _configStorage.Save(config);
+                                _vault.RemoveAccount(acc.AccountId);
+                                _refreshService.RemoveAccount(acc.AccountId);
+                            }))
+                            {
+                                Title = "Remove Account"
                             }
                         }
                     });
@@ -154,7 +164,7 @@ public class ProviderDetailsPage : ListPage
                             config.Accounts.RemoveAll(a => a.Id == acc.AccountId);
                             _configStorage.Save(config);
                             _vault.RemoveAccount(acc.AccountId);
-                            _ = _refreshService.RefreshAllAsync();
+                            _refreshService.RemoveAccount(acc.AccountId);
                         }))
                         {
                             Title = "Remove Account"
