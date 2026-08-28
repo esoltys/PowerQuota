@@ -33,6 +33,8 @@ if ($Register) {
     try {
         $cmdPalSettingsPath = "$env:LOCALAPPDATA\Packages\Microsoft.CommandPalette_8wekyb3d8bbwe\LocalState\settings.json"
         if (Test-Path $cmdPalSettingsPath) {
+            Stop-Process -Name "Microsoft.CmdPal.UI" -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 300
             $rawSettings = [System.IO.File]::ReadAllText($cmdPalSettingsPath)
             $doc = [System.Text.Json.Nodes.JsonNode]::Parse($rawSettings)
             $dockSettings = $doc["DockSettings"]
