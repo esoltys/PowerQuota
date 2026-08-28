@@ -539,19 +539,31 @@ public class ProviderTests
         var (at, rt, exp) = HostCliScanner.ScanCodexTokens();
         if (!string.IsNullOrEmpty(at))
         {
-            var vault = new WindowsCredentialVault();
-            var client = new HttpClient();
-            var provider = new CodexProvider();
-            var account = new AccountConfig
+            var tempDir = Path.Combine(Path.GetTempPath(), "PowerQuotaTests", Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempDir);
+            try
             {
-                Id = "test-live-codex",
-                Provider = ProviderId.Codex,
-                Label = "Codex Live Test"
-            };
+                var vault = new WindowsCredentialVault(tempDir);
+                var client = new HttpClient();
+                var provider = new CodexProvider();
+                var account = new AccountConfig
+                {
+                    Id = "test-live-codex",
+                    Provider = ProviderId.Codex,
+                    Label = "Codex Live Test"
+                };
 
-            var snapshot = await provider.FetchAsync(account, vault, client);
-            Assert.Equal(ProviderId.Codex, snapshot.Provider);
-            Assert.NotEmpty(snapshot.Windows);
+                var snapshot = await provider.FetchAsync(account, vault, client);
+                Assert.Equal(ProviderId.Codex, snapshot.Provider);
+                Assert.NotEmpty(snapshot.Windows);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
         }
     }
 

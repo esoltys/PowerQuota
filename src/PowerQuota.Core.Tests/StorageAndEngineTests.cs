@@ -5,12 +5,38 @@ using PowerQuota.Core.Storage;
 
 namespace PowerQuota.Core.Tests;
 
-public class StorageAndEngineTests
+public class StorageAndEngineTests : IDisposable
 {
+    private readonly string _testDir;
+    private readonly ConfigStorage _storage;
+    private readonly WindowsCredentialVault _vault;
+
+    public StorageAndEngineTests()
+    {
+        _testDir = Path.Combine(Path.GetTempPath(), "PowerQuotaTests", Guid.NewGuid().ToString());
+        Directory.CreateDirectory(_testDir);
+        _storage = new ConfigStorage(_testDir);
+        _vault = new WindowsCredentialVault(_testDir);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_testDir))
+        {
+            try
+            {
+                Directory.Delete(_testDir, recursive: true);
+            }
+            catch
+            {
+                // Ignore cleanup errors during test teardown
+            }
+        }
+    }
+
     [Fact]
     public void CredentialVault_EncryptsAndDecryptsTokensAndApiKeys()
     {
-        var vault = new WindowsCredentialVault();
         var accountId = "test-acc-123";
 
         var tokens = new StoredTokens
@@ -21,11 +47,11 @@ public class StorageAndEngineTests
             TokenId = "user_456"
         };
 
-        vault.SaveTokens(accountId, tokens);
-        vault.SaveApiKey(accountId, "sk-minimax-key-789");
+        _vault.SaveTokens(accountId, tokens);
+        _vault.SaveApiKey(accountId, "sk-minimax-key-789");
 
-        var retrievedTokens = vault.GetTokens(accountId);
-        var retrievedKey = vault.GetApiKey(accountId);
+        var retrievedTokens = _vault.GetTokens(accountId);
+        var retrievedKey = _vault.GetApiKey(accountId);
 
         Assert.NotNull(retrievedTokens);
         Assert.Equal("sec_access_token_xyz", retrievedTokens!.AccessToken);
@@ -33,24 +59,35 @@ public class StorageAndEngineTests
         Assert.Equal("user_456", retrievedTokens.TokenId);
         Assert.Equal("sk-minimax-key-789", retrievedKey);
 
-        vault.RemoveAccount(accountId);
-        Assert.Null(vault.GetTokens(accountId));
-        Assert.Null(vault.GetApiKey(accountId));
+        // Verify isolation and reload persistence from the isolated directory
+        var reloadedVault = new WindowsCredentialVault(_testDir);
+        var reloadedTokens = reloadedVault.GetTokens(accountId);
+        var reloadedKey = reloadedVault.GetApiKey(accountId);
+        Assert.NotNull(reloadedTokens);
+        Assert.Equal("sec_access_token_xyz", reloadedTokens!.AccessToken);
+        Assert.Equal("sk-minimax-key-789", reloadedKey);
+
+        _vault.RemoveAccount(accountId);
+        Assert.Null(_vault.GetTokens(accountId));
+        Assert.Null(_vault.GetApiKey(accountId));
+
+        var afterRemovalVault = new WindowsCredentialVault(_testDir);
+        Assert.Null(afterRemovalVault.GetTokens(accountId));
+        Assert.Null(afterRemovalVault.GetApiKey(accountId));
     }
 
     [Fact]
     public void PowerQuotaCommandProvider_TopLevelCommands_And_DockBands_HaveStableIds()
     {
-        var storage = new ConfigStorage();
-        storage.Current.Accounts.Add(new AccountConfig
+        _storage.Current.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
         });
 
-        var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
-        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
+        var refreshService = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(_storage, _vault, refreshService);
         
         var topCommands = provider.TopLevelCommands();
         Assert.NotEmpty(topCommands);
@@ -73,16 +110,15 @@ public class StorageAndEngineTests
     [Fact]
     public void PowerQuotaCommandProvider_GetCommandItem_ResolvesByExactId_Prefix_And_Title()
     {
-        var storage = new ConfigStorage();
-        storage.Current.Accounts.Add(new AccountConfig
+        _storage.Current.Accounts.Add(new AccountConfig
         {
             Id = "acc-claude-test",
             Provider = ProviderId.Claude,
             Label = "Claude Pro"
         });
 
-        var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
-        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
+        var refreshService = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(_storage, _vault, refreshService);
         
         // Exact Id match on top-level overview
         var overviewItem = provider.GetCommandItem("powerquota-overview");
@@ -112,16 +148,15 @@ public class StorageAndEngineTests
     [Fact]
     public void ConfigStorage_LoadsAndSavesSettings()
     {
-        var storage = new ConfigStorage();
-        var cfg = storage.Current;
+        var cfg = _storage.Current;
 
         cfg.RefreshIntervalMinutes = 15;
         cfg.DisplayRemainingNotUsed = true;
         cfg.DockDisplayMode = DockDisplayMode.PercentageOnly;
 
-        storage.Save(cfg);
+        _storage.Save(cfg);
 
-        var reloaded = new ConfigStorage();
+        var reloaded = new ConfigStorage(_testDir);
         Assert.Equal(15, reloaded.Current.RefreshIntervalMinutes);
         Assert.True(reloaded.Current.DisplayRemainingNotUsed);
         Assert.Equal(DockDisplayMode.PercentageOnly, reloaded.Current.DockDisplayMode);
@@ -130,10 +165,7 @@ public class StorageAndEngineTests
     [Fact]
     public void QuotaRefreshService_InitializesStateForAllProviders()
     {
-        var configStorage = new ConfigStorage();
-        var vault = new WindowsCredentialVault();
-
-        using var service = new QuotaRefreshService(configStorage, vault);
+        using var service = new QuotaRefreshService(_storage, _vault);
 
         Assert.NotNull(service.State);
         Assert.Equal(7, service.State.Providers.Count);

@@ -4,17 +4,23 @@ namespace PowerQuota.Core.Storage;
 
 public class ConfigStorage
 {
-    private static readonly string StorageDir = Path.Combine(
+    public static readonly string DefaultStorageDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "PowerQuota"
     );
-    private static readonly string ConfigFile = Path.Combine(StorageDir, "config.json");
+
+    public string StorageDirectory { get; }
+    public string ConfigFilePath { get; }
 
     private readonly object _lock = new();
     private PowerQuotaConfig _current = new();
 
-    public ConfigStorage()
+    public ConfigStorage(string? customDirectoryPath = null)
     {
+        StorageDirectory = !string.IsNullOrWhiteSpace(customDirectoryPath)
+            ? customDirectoryPath
+            : DefaultStorageDir;
+        ConfigFilePath = Path.Combine(StorageDirectory, "config.json");
         _current = Load();
     }
 
@@ -33,9 +39,9 @@ public class ConfigStorage
             _current = config;
             try
             {
-                Directory.CreateDirectory(StorageDir);
+                Directory.CreateDirectory(StorageDirectory);
                 var json = JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(ConfigFile, json);
+                File.WriteAllText(ConfigFilePath, json);
             }
             catch (Exception ex)
             {
@@ -46,10 +52,10 @@ public class ConfigStorage
 
     private PowerQuotaConfig Load()
     {
-        if (!File.Exists(ConfigFile)) return new PowerQuotaConfig();
+        if (!File.Exists(ConfigFilePath)) return new PowerQuotaConfig();
         try
         {
-            var json = File.ReadAllText(ConfigFile);
+            var json = File.ReadAllText(ConfigFilePath);
             return JsonSerializer.Deserialize<PowerQuotaConfig>(json) ?? new PowerQuotaConfig();
         }
         catch
