@@ -236,21 +236,108 @@ public class StorageAndEngineTests : IDisposable
     }
 
     [Fact]
+    public async Task QuotaRefreshService_PreventsOverlappingRefreshes_SerializesExecution()
+    {
+        _storage.Mutate(cfg =>
+        {
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = "acc-claude-concurrency",
+                Provider = ProviderId.Claude,
+                Label = "Claude Concurrency Test"
+            });
+        });
+
+        var slowAdapter = new ConcurrencyTestingAdapter(ProviderId.Claude, delayMs: 80);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        service.RegisterAdapter(slowAdapter);
+
+        // Launch multiple concurrent refreshes
+        var task1 = service.RefreshAllAsync();
+        var task2 = service.RefreshProviderAsync(ProviderId.Claude);
+        var task3 = service.RefreshAllAsync();
+        var task4 = service.RefreshProviderAsync(ProviderId.Claude);
+
+        await Task.WhenAll(task1, task2, task3, task4);
+
+        // Max concurrent refresh executions must never exceed 1
+        Assert.Equal(1, slowAdapter.MaxConcurrent);
+        Assert.Equal(4, slowAdapter.TotalInvocations);
+    }
+
+    [Fact]
+    public async Task QuotaRefreshService_Disposal_CancelsInFlightWorkCleanly()
+    {
+        _storage.Mutate(cfg =>
+        {
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = "acc-claude-cancel",
+                Provider = ProviderId.Claude,
+                Label = "Claude Cancel Test"
+            });
+        });
+
+        var slowAdapter = new ConcurrencyTestingAdapter(ProviderId.Claude, delayMs: 1000);
+        var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        service.RegisterAdapter(slowAdapter);
+
+        var refreshTask = service.RefreshAllAsync();
+        await Task.Delay(50); // Let refresh start and acquire lock
+
+        service.Dispose();
+
+        // Should complete without throwing unhandled exceptions
+        await refreshTask;
+    }
+
+    [Fact]
+    public async Task QuotaRefreshService_ObservesExceptionsSafely_WithoutCrashing()
+    {
+        _storage.Mutate(cfg =>
+        {
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = "acc-failing",
+                Provider = ProviderId.Claude,
+                Label = "Failing Adapter Test"
+            });
+        });
+
+        var failingAdapter = new FailingTestingAdapter(ProviderId.Claude);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
+        service.RegisterAdapter(failingAdapter);
+
+        // Both calls should complete gracefully and not throw unhandled exception
+        await service.RefreshProviderAsync(ProviderId.Claude);
+        await service.RefreshAllAsync();
+
+        var accState = service.State.ProviderAccounts.FirstOrDefault(a => a.AccountId == "acc-failing");
+        Assert.NotNull(accState);
+        Assert.Equal(ProviderHealth.Error, accState!.Health);
+        Assert.Contains("Simulated network failure", accState.Error);
+    }
+
+    [Fact]
     public void QuotaRefreshService_RemoveAccount_RemovesStateImmediatelyAndFiresEvent()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Mutate(cfg => cfg.Accounts.Clear());
-        var vault = new WindowsCredentialVault();
         var accountId = "acc-remove-test-1";
 
-        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        _storage.Mutate(cfg =>
         {
-            Id = accountId,
-            Provider = ProviderId.Claude,
-            Label = "Claude Test"
-        }));
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = accountId,
+                Provider = ProviderId.Claude,
+                Label = "Claude Test"
+            });
+        });
 
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
 
         service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
         {
@@ -268,7 +355,7 @@ public class StorageAndEngineTests : IDisposable
             eventFired = true;
         };
 
-        configStorage.Mutate(cfg => cfg.Accounts.RemoveAll(a => a.Id == accountId));
+        _storage.Mutate(cfg => cfg.Accounts.RemoveAll(a => a.Id == accountId));
         service.RemoveAccount(accountId);
 
         Assert.True(eventFired);
@@ -280,14 +367,12 @@ public class StorageAndEngineTests : IDisposable
     [Fact]
     public void QuotaRefreshService_RemoveAccount_FallsBackToRemainingConfiguredAccount()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Mutate(cfg => cfg.Accounts.Clear());
-        var vault = new WindowsCredentialVault();
         var accountId1 = "acc-remove-1";
         var accountId2 = "acc-remaining-2";
 
-        configStorage.Mutate(cfg =>
+        _storage.Mutate(cfg =>
         {
+            cfg.Accounts.Clear();
             cfg.Accounts.Add(new AccountConfig
             {
                 Id = accountId1,
@@ -302,7 +387,7 @@ public class StorageAndEngineTests : IDisposable
             });
         });
 
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
 
         service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
         {
@@ -318,7 +403,7 @@ public class StorageAndEngineTests : IDisposable
         });
         service.State.Providers.First(p => p.Provider == ProviderId.Claude).ActiveAccountId = accountId1;
 
-        configStorage.Mutate(cfg => cfg.Accounts.RemoveAll(a => a.Id == accountId1));
+        _storage.Mutate(cfg => cfg.Accounts.RemoveAll(a => a.Id == accountId1));
         service.RemoveAccount(accountId1);
 
         Assert.DoesNotContain(service.State.ProviderAccounts, a => a.AccountId == accountId1);
@@ -329,19 +414,21 @@ public class StorageAndEngineTests : IDisposable
     [Fact]
     public void QuotaRefreshService_ReconcileAccounts_PrunesOrphanedAccounts()
     {
-        var configStorage = new ConfigStorage();
-        var vault = new WindowsCredentialVault();
         var validAccountId = "acc-valid-1";
         var orphanAccountId = "acc-orphan-2";
 
-        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        _storage.Mutate(cfg =>
         {
-            Id = validAccountId,
-            Provider = ProviderId.Claude,
-            Label = "Claude Valid"
-        }));
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = validAccountId,
+                Provider = ProviderId.Claude,
+                Label = "Claude Valid"
+            });
+        });
 
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
 
         service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
         {
@@ -365,20 +452,21 @@ public class StorageAndEngineTests : IDisposable
     [Fact]
     public async Task QuotaRefreshService_RefreshProviderAsync_PrunesOrphanedAccounts()
     {
-        var configStorage = new ConfigStorage();
-        configStorage.Mutate(cfg => cfg.Accounts.Clear());
-        var vault = new WindowsCredentialVault();
         var validAccountId = "acc-valid-refresh";
         var orphanAccountId = "acc-orphan-refresh";
 
-        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        _storage.Mutate(cfg =>
         {
-            Id = validAccountId,
-            Provider = ProviderId.Claude,
-            Label = "Claude Valid"
-        }));
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = validAccountId,
+                Provider = ProviderId.Claude,
+                Label = "Claude Valid"
+            });
+        });
 
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
 
         service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
         {
@@ -402,19 +490,21 @@ public class StorageAndEngineTests : IDisposable
     [Fact]
     public void ProviderDetailsPage_RemoveAccount_RemovesFromConfigVaultAndRuntimeState()
     {
-        var configStorage = new ConfigStorage();
-        var vault = new WindowsCredentialVault();
         var accountId = "acc-page-remove-test";
 
-        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        _storage.Mutate(cfg =>
         {
-            Id = accountId,
-            Provider = ProviderId.Minimax,
-            Label = "Minimax Test"
-        }));
-        vault.SaveApiKey(accountId, "sk-test-key");
+            cfg.Accounts.Clear();
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = accountId,
+                Provider = ProviderId.Minimax,
+                Label = "Minimax Test"
+            });
+        });
+        _vault.SaveApiKey(accountId, "sk-test-key");
 
-        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        using var service = new QuotaRefreshService(_storage, _vault, autoStartTimer: false);
 
         service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
         {
@@ -424,7 +514,7 @@ public class StorageAndEngineTests : IDisposable
             Error = "Key required"
         });
 
-        var page = new PowerQuota.CommandPalette.Pages.ProviderDetailsPage(ProviderId.Minimax, service, configStorage, vault);
+        var page = new PowerQuota.CommandPalette.Pages.ProviderDetailsPage(ProviderId.Minimax, service, _storage, _vault);
         var items = page.GetItems();
         Assert.Single(items);
 
@@ -436,8 +526,8 @@ public class StorageAndEngineTests : IDisposable
         Assert.NotNull(invokable);
         invokable!.Invoke(null!);
 
-        Assert.DoesNotContain(configStorage.Current.Accounts, a => a.Id == accountId);
-        Assert.Null(vault.GetApiKey(accountId));
+        Assert.DoesNotContain(_storage.Current.Accounts, a => a.Id == accountId);
+        Assert.Null(_vault.GetApiKey(accountId));
         Assert.DoesNotContain(service.State.ProviderAccounts, a => a.AccountId == accountId);
 
         var updatedItems = page.GetItems();
@@ -462,5 +552,76 @@ public class StorageAndEngineTests : IDisposable
         var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
         extension.Dispose();
         Assert.True(PowerQuota.CommandPalette.PowerQuotaExtension.DisposedEvent.WaitOne(0));
+    }
+
+    private class ConcurrencyTestingAdapter : PowerQuota.Core.Providers.IProviderAdapter
+    {
+        private int _currentConcurrent;
+        private int _maxConcurrent;
+        private int _totalInvocations;
+        private readonly int _delayMs;
+
+        public ProviderId Id { get; }
+        public int MaxConcurrent => _maxConcurrent;
+        public int TotalInvocations => _totalInvocations;
+
+        public ConcurrencyTestingAdapter(ProviderId id, int delayMs = 50)
+        {
+            Id = id;
+            _delayMs = delayMs;
+        }
+
+        public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
+        {
+            int current = Interlocked.Increment(ref _currentConcurrent);
+            Interlocked.Increment(ref _totalInvocations);
+
+            int initialMax, computedMax;
+            do
+            {
+                initialMax = _maxConcurrent;
+                computedMax = Math.Max(initialMax, current);
+            } while (Interlocked.CompareExchange(ref _maxConcurrent, computedMax, initialMax) != initialMax);
+
+            try
+            {
+                await Task.Delay(_delayMs, ct);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _currentConcurrent);
+            }
+
+            return new UsageSnapshot
+            {
+                Provider = Id,
+                Identity = new ProviderIdentity { Email = "test@example.com" }
+            };
+        }
+
+        public Task<string?> GetSystemActiveAccountIdAsync(IReadOnlyList<AccountConfig> accounts, WindowsCredentialVault vault)
+        {
+            return Task.FromResult<string?>(accounts.FirstOrDefault()?.Id);
+        }
+    }
+
+    private class FailingTestingAdapter : PowerQuota.Core.Providers.IProviderAdapter
+    {
+        public ProviderId Id { get; }
+
+        public FailingTestingAdapter(ProviderId id)
+        {
+            Id = id;
+        }
+
+        public Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
+        {
+            throw new HttpRequestException("Simulated network failure");
+        }
+
+        public Task<string?> GetSystemActiveAccountIdAsync(IReadOnlyList<AccountConfig> accounts, WindowsCredentialVault vault)
+        {
+            return Task.FromResult<string?>(accounts.FirstOrDefault()?.Id);
+        }
     }
 }

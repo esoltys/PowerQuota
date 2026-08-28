@@ -14,5 +14,9 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.11" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="PowerQuota.Core.Tests" />
+  </ItemGroup>
+
 </Project>
 
