@@ -236,6 +236,216 @@ public class StorageAndEngineTests : IDisposable
     }
 
     [Fact]
+    public void QuotaRefreshService_RemoveAccount_RemovesStateImmediatelyAndFiresEvent()
+    {
+        var configStorage = new ConfigStorage();
+        configStorage.Mutate(cfg => cfg.Accounts.Clear());
+        var vault = new WindowsCredentialVault();
+        var accountId = "acc-remove-test-1";
+
+        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        {
+            Id = accountId,
+            Provider = ProviderId.Claude,
+            Label = "Claude Test"
+        }));
+
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = accountId,
+            Label = "Claude Test",
+            Snapshot = new UsageSnapshot { Provider = ProviderId.Claude }
+        });
+        service.State.Providers.First(p => p.Provider == ProviderId.Claude).ActiveAccountId = accountId;
+        service.State.Providers.First(p => p.Provider == ProviderId.Claude).SystemActiveAccountId = accountId;
+
+        bool eventFired = false;
+        service.StateChanged += (sender, state) =>
+        {
+            eventFired = true;
+        };
+
+        configStorage.Mutate(cfg => cfg.Accounts.RemoveAll(a => a.Id == accountId));
+        service.RemoveAccount(accountId);
+
+        Assert.True(eventFired);
+        Assert.DoesNotContain(service.State.ProviderAccounts, a => a.AccountId == accountId);
+        Assert.Null(service.State.Providers.First(p => p.Provider == ProviderId.Claude).SystemActiveAccountId);
+        Assert.Null(service.State.Providers.First(p => p.Provider == ProviderId.Claude).ActiveAccountId);
+    }
+
+    [Fact]
+    public void QuotaRefreshService_RemoveAccount_FallsBackToRemainingConfiguredAccount()
+    {
+        var configStorage = new ConfigStorage();
+        configStorage.Mutate(cfg => cfg.Accounts.Clear());
+        var vault = new WindowsCredentialVault();
+        var accountId1 = "acc-remove-1";
+        var accountId2 = "acc-remaining-2";
+
+        configStorage.Mutate(cfg =>
+        {
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = accountId1,
+                Provider = ProviderId.Claude,
+                Label = "Claude Account 1"
+            });
+            cfg.Accounts.Add(new AccountConfig
+            {
+                Id = accountId2,
+                Provider = ProviderId.Claude,
+                Label = "Claude Account 2"
+            });
+        });
+
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = accountId1,
+            Label = "Claude Account 1"
+        });
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = accountId2,
+            Label = "Claude Account 2"
+        });
+        service.State.Providers.First(p => p.Provider == ProviderId.Claude).ActiveAccountId = accountId1;
+
+        configStorage.Mutate(cfg => cfg.Accounts.RemoveAll(a => a.Id == accountId1));
+        service.RemoveAccount(accountId1);
+
+        Assert.DoesNotContain(service.State.ProviderAccounts, a => a.AccountId == accountId1);
+        Assert.Contains(service.State.ProviderAccounts, a => a.AccountId == accountId2);
+        Assert.Equal(accountId2, service.State.Providers.First(p => p.Provider == ProviderId.Claude).ActiveAccountId);
+    }
+
+    [Fact]
+    public void QuotaRefreshService_ReconcileAccounts_PrunesOrphanedAccounts()
+    {
+        var configStorage = new ConfigStorage();
+        var vault = new WindowsCredentialVault();
+        var validAccountId = "acc-valid-1";
+        var orphanAccountId = "acc-orphan-2";
+
+        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        {
+            Id = validAccountId,
+            Provider = ProviderId.Claude,
+            Label = "Claude Valid"
+        }));
+
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = validAccountId,
+            Label = "Claude Valid"
+        });
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = orphanAccountId,
+            Label = "Claude Orphan"
+        });
+
+        service.ReconcileAccounts();
+
+        Assert.Single(service.State.ProviderAccounts);
+        Assert.Equal(validAccountId, service.State.ProviderAccounts[0].AccountId);
+    }
+
+    [Fact]
+    public async Task QuotaRefreshService_RefreshProviderAsync_PrunesOrphanedAccounts()
+    {
+        var configStorage = new ConfigStorage();
+        configStorage.Mutate(cfg => cfg.Accounts.Clear());
+        var vault = new WindowsCredentialVault();
+        var validAccountId = "acc-valid-refresh";
+        var orphanAccountId = "acc-orphan-refresh";
+
+        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        {
+            Id = validAccountId,
+            Provider = ProviderId.Claude,
+            Label = "Claude Valid"
+        }));
+
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = validAccountId,
+            Label = "Claude Valid"
+        });
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = orphanAccountId,
+            Label = "Claude Orphan"
+        });
+
+        await service.RefreshProviderAsync(ProviderId.Claude);
+
+        Assert.DoesNotContain(service.State.ProviderAccounts, a => a.AccountId == orphanAccountId);
+        Assert.Contains(service.State.ProviderAccounts, a => a.AccountId == validAccountId);
+    }
+
+    [Fact]
+    public void ProviderDetailsPage_RemoveAccount_RemovesFromConfigVaultAndRuntimeState()
+    {
+        var configStorage = new ConfigStorage();
+        var vault = new WindowsCredentialVault();
+        var accountId = "acc-page-remove-test";
+
+        configStorage.Mutate(cfg => cfg.Accounts.Add(new AccountConfig
+        {
+            Id = accountId,
+            Provider = ProviderId.Minimax,
+            Label = "Minimax Test"
+        }));
+        vault.SaveApiKey(accountId, "sk-test-key");
+
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+
+        service.State.ProviderAccounts.Add(new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Minimax,
+            AccountId = accountId,
+            Label = "Minimax Test",
+            Error = "Key required"
+        });
+
+        var page = new PowerQuota.CommandPalette.Pages.ProviderDetailsPage(ProviderId.Minimax, service, configStorage, vault);
+        var items = page.GetItems();
+        Assert.Single(items);
+
+        var removeContextItem = items[0].MoreCommands?.OfType<Microsoft.CommandPalette.Extensions.Toolkit.CommandContextItem>()
+            .FirstOrDefault(c => c.Title == "Remove Account");
+        Assert.NotNull(removeContextItem);
+
+        var invokable = removeContextItem!.Command as Microsoft.CommandPalette.Extensions.IInvokableCommand;
+        Assert.NotNull(invokable);
+        invokable!.Invoke(null!);
+
+        Assert.DoesNotContain(configStorage.Current.Accounts, a => a.Id == accountId);
+        Assert.Null(vault.GetApiKey(accountId));
+        Assert.DoesNotContain(service.State.ProviderAccounts, a => a.AccountId == accountId);
+
+        var updatedItems = page.GetItems();
+        Assert.Single(updatedItems);
+        Assert.Equal("No accounts configured", updatedItems[0].Title);
+    }
+
+    [Fact]
     public void PowerQuotaExtension_GetProvider_ReturnsCommandProvider_AndHandlesLoggingSafely()
     {
         var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
