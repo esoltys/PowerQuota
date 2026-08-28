@@ -1,0 +1,22 @@
+name: Add to Project
+
+on:
+  issues:
+    types:
+      - opened
+      - reopened
+  pull_request:
+    types:
+      - opened
+      - reopened
+
+jobs:
+  add-to-project:
+    name: Add issue or PR to PowerQuota Project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add to Project
+        uses: actions/add-to-project@v1.0.2
+        with:
+          project-url: https://github.com/users/esoltys/projects/4
+          github-token: ${{ secrets.ADD_TO_PROJECT_PAT || secrets.PROJECT_PAT || secrets.GITHUB_TOKEN }}
