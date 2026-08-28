@@ -18,7 +18,10 @@ public class OverviewListPage : ListPage
         _refreshService = refreshService;
         _configStorage = configStorage;
         _vault = vault;
+        Id = "powerquota-overview";
+        Name = "PowerQuota";
         Title = "PowerQuota";
+        Icon = ProviderIcons.GetIcon();
         PlaceholderText = "Search quotas...";
 
         _refreshService.StateChanged += (_, _) => RaiseItemsChanged(GetItems().Length);

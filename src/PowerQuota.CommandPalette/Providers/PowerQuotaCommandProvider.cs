@@ -15,6 +15,17 @@ public class PowerQuotaCommandProvider : CommandProvider
     private readonly OverviewListPage _overviewPage;
     private readonly AddAccountFormPage _addAccountPage;
     private readonly SettingsFormPage _settingsPage;
+    private readonly Dictionary<ProviderId, ProviderDetailsPage> _providerPages = new();
+
+    private ProviderDetailsPage GetOrCreateProviderPage(ProviderId pid)
+    {
+        if (!_providerPages.TryGetValue(pid, out var page))
+        {
+            page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault);
+            _providerPages[pid] = page;
+        }
+        return page;
+    }
 
     public PowerQuotaCommandProvider()
         : this(new ConfigStorage(), new WindowsCredentialVault(), null)
@@ -51,6 +62,8 @@ public class PowerQuotaCommandProvider : CommandProvider
         // 1. Primary entrypoint: PowerQuota Overview
         _overviewPage.Id = "powerquota-overview";
         _overviewPage.Name = "PowerQuota";
+        _overviewPage.Title = "PowerQuota";
+        _overviewPage.Icon = ProviderIcons.GetIcon();
         commands.Add(new CommandItem(_overviewPage)
         {
             Title = "PowerQuota",
@@ -66,12 +79,7 @@ public class PowerQuotaCommandProvider : CommandProvider
             var accounts = _refreshService.State.ProviderAccounts.Where(a => a.Provider == pid).ToList();
             if (accounts.Count == 0 && !config.Accounts.Any(a => a.Provider == pid)) continue;
 
-            var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
-            {
-                Id = $"provider-{pid}",
-                Name = $"{pid.GetLabel()} Quota"
-            };
-
+            var page = GetOrCreateProviderPage(pid);
             var primaryAcc = accounts.FirstOrDefault();
             string statusLine = primaryAcc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
             commands.Add(new CommandItem(page)
@@ -87,7 +95,8 @@ public class PowerQuotaCommandProvider : CommandProvider
                     })
                     {
                         Id = $"refresh-{pid}",
-                        Name = $"Refresh {pid.GetLabel()} Quota"
+                        Name = $"Refresh {pid.GetLabel()} Quota",
+                        Icon = new IconInfo("\uE72C")
                     })
                     {
                         Title = "Refresh Quota"
@@ -98,22 +107,25 @@ public class PowerQuotaCommandProvider : CommandProvider
         }
 
         // 3. Quick Action Commands
+        var refreshAllIcon = new IconInfo("\uE72C");
         commands.Add(new CommandItem(new AnonymousCommand(() =>
         {
             _ = _refreshService.RefreshAllAsync();
         })
         {
             Id = "action-refresh-all",
-            Name = "Refresh All Quotas"
+            Name = "Refresh All Quotas",
+            Icon = refreshAllIcon
         })
         {
             Title = "Refresh All Quotas",
             Subtitle = "Query all providers for current quota metrics",
-            Icon = new IconInfo("\uE72C")
+            Icon = refreshAllIcon
         });
 
         _addAccountPage.Id = "action-add-account";
         _addAccountPage.Name = "Add Account";
+        _addAccountPage.Icon = new IconInfo("\uE710");
         commands.Add(new CommandItem(_addAccountPage)
         {
             Title = "Add Account...",
@@ -123,6 +135,7 @@ public class PowerQuotaCommandProvider : CommandProvider
 
         _settingsPage.Id = "action-settings";
         _settingsPage.Name = "PowerQuota Settings";
+        _settingsPage.Icon = new IconInfo("\uE713");
         commands.Add(new CommandItem(_settingsPage)
         {
             Title = "PowerQuota Settings",
@@ -130,6 +143,7 @@ public class PowerQuotaCommandProvider : CommandProvider
             Icon = new IconInfo("\uE713")
         });
 
+        var githubIcon = new IconInfo("\uE8A7");
         commands.Add(new CommandItem(new AnonymousCommand(() =>
         {
             try
@@ -144,12 +158,13 @@ public class PowerQuotaCommandProvider : CommandProvider
         })
         {
             Id = "action-github",
-            Name = "PowerQuota GitHub Repository"
+            Name = "PowerQuota GitHub Repository",
+            Icon = githubIcon
         })
         {
             Title = "PowerQuota GitHub Repository",
             Subtitle = "Open github.com/esoltys/PowerQuota in browser",
-            Icon = new IconInfo("\uE8A7")
+            Icon = githubIcon
         });
 
         return commands.ToArray();
@@ -170,36 +185,22 @@ public class PowerQuotaCommandProvider : CommandProvider
 
             if (accounts.Count == 0)
             {
-                if (configuredAccounts.Count > 0)
+                foreach (var cfgAcc in configuredAccounts)
                 {
-                    foreach (var cfgAcc in configuredAccounts)
-                    {
-                        string accountKey = string.IsNullOrEmpty(cfgAcc.Id) ? "default" : cfgAcc.Id;
-                        var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
-                        {
-                            Id = $"dock-{pid}-{accountKey}-status",
-                            Name = $"{pid.GetLabel()} Quota"
-                        };
-                        bands.Add(new CommandItem(page)
-                        {
-                            Title = $"{pid.GetLabel()} Quota",
-                            Subtitle = "Ready",
-                            Icon = ProviderIcons.GetIcon(pid)
-                        });
-                    }
-                }
-                else
-                {
+                    string accountKey = string.IsNullOrEmpty(cfgAcc.Id) ? "default" : cfgAcc.Id;
+                    var icon = ProviderIcons.GetIcon(pid);
                     var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
                     {
-                        Id = $"dock-{pid}-default-status",
-                        Name = $"{pid.GetLabel()} Quota"
+                        Id = $"dock-{pid}-{accountKey}-status",
+                        Name = $"{pid.GetLabel()} Quota",
+                        Title = $"{pid.GetLabel()} Quota",
+                        Icon = icon
                     };
                     bands.Add(new CommandItem(page)
                     {
                         Title = $"{pid.GetLabel()} Quota",
                         Subtitle = "Ready",
-                        Icon = ProviderIcons.GetIcon(pid)
+                        Icon = icon
                     });
                 }
                 continue;
@@ -251,7 +252,9 @@ public class PowerQuotaCommandProvider : CommandProvider
                         var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
                         {
                             Id = $"dock-{pid}-{accountKey}-{window.Label}",
-                            Name = $"{pid.GetLabel()} - {window.Label}"
+                            Name = $"{pid.GetLabel()} - {window.Label}",
+                            Title = $"{pid.GetLabel()} - {window.Label}",
+                            Icon = icon
                         };
                         bands.Add(new CommandItem(page)
                         {
@@ -266,7 +269,8 @@ public class PowerQuotaCommandProvider : CommandProvider
                                 })
                                 {
                                     Id = $"dock-refresh-{pid}-{accountKey}-{window.Label}",
-                                    Name = $"Refresh {pid.GetLabel()} Quota"
+                                    Name = $"Refresh {pid.GetLabel()} Quota",
+                                    Icon = new IconInfo("\uE72C")
                                 })
                                 {
                                     Title = "Refresh Quota"
@@ -278,16 +282,19 @@ public class PowerQuotaCommandProvider : CommandProvider
                 else
                 {
                     string status = acc?.GetStatusLine(config.DisplayRemainingNotUsed) ?? "Ready";
+                    var icon = ProviderIcons.GetIcon(pid);
                     var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
                     {
                         Id = $"dock-{pid}-{accountKey}-status",
-                        Name = $"{pid.GetLabel()} Quota"
+                        Name = $"{pid.GetLabel()} Quota",
+                        Title = $"{pid.GetLabel()} Quota",
+                        Icon = icon
                     };
                     bands.Add(new CommandItem(page)
                     {
                         Title = $"{pid.GetLabel()} Quota",
                         Subtitle = status,
-                        Icon = ProviderIcons.GetIcon(pid)
+                        Icon = icon
                     });
                 }
             }

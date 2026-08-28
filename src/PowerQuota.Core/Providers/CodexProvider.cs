@@ -10,16 +10,18 @@ namespace PowerQuota.Core.Providers;
 public class CodexProvider : IProviderAdapter
 {
     private const string UsageEndpoint = "https://chatgpt.com/backend-api/wham/usage";
-    private const string TokenEndpoint = "https://auth0.openai.com/oauth/token";
+    private const string TokenEndpoint = "https://auth.openai.com/oauth/token";
+    private const string ClientId = "app_EMoamEEZ73f0CkXaXp7hrann";
 
     public ProviderId Id => ProviderId.Codex;
 
     public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
     {
         var tokens = vault.GetTokens(account.Id) ?? new StoredTokens();
+        var (scannedAt, scannedRt, scannedExp) = HostCliScanner.ScanCodexTokens();
+
         if (string.IsNullOrEmpty(tokens.AccessToken))
         {
-            var (scannedAt, scannedRt, scannedExp) = HostCliScanner.ScanCodexTokens();
             if (!string.IsNullOrEmpty(scannedAt))
             {
                 tokens.AccessToken = scannedAt;
@@ -30,6 +32,26 @@ public class CodexProvider : IProviderAdapter
             else
             {
                 throw new InvalidOperationException("Codex login required");
+            }
+        }
+        else
+        {
+            // If tokens in vault don't have expiration, extract from JWT
+            if (!tokens.ExpiresAt.HasValue && !string.IsNullOrEmpty(tokens.AccessToken))
+            {
+                tokens.ExpiresAt = HostCliScanner.ExtractJwtExpiration(tokens.AccessToken);
+            }
+
+            // If token in vault is expired or expiring soon, check if host scanner has a newer token
+            if (tokens.ExpiresAt.HasValue && tokens.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(2))
+            {
+                if (!string.IsNullOrEmpty(scannedAt) && scannedAt != tokens.AccessToken)
+                {
+                    tokens.AccessToken = scannedAt;
+                    tokens.RefreshToken = scannedRt ?? tokens.RefreshToken;
+                    tokens.ExpiresAt = scannedExp ?? HostCliScanner.ExtractJwtExpiration(scannedAt);
+                    vault.SaveTokens(account.Id, tokens);
+                }
             }
         }
 
@@ -43,18 +65,45 @@ public class CodexProvider : IProviderAdapter
             }
         }
 
-        var request = CreateUsageRequest(tokens.AccessToken, account.ProviderAccountId);
+        string? effectiveAccountId = account.ProviderAccountId;
+        if (string.IsNullOrEmpty(effectiveAccountId) && !string.IsNullOrEmpty(tokens.AccessToken))
+        {
+            var (jwtAccountId, jwtEmail, _) = HostCliScanner.ExtractCodexJwtMetadata(tokens.AccessToken);
+            effectiveAccountId = jwtAccountId;
+            if (string.IsNullOrEmpty(account.Email) && !string.IsNullOrEmpty(jwtEmail))
+            {
+                account.Email = jwtEmail;
+            }
+        }
+
+        var request = CreateUsageRequest(tokens.AccessToken, effectiveAccountId);
         var response = await client.SendAsync(request, ct);
 
         // Reactive token refresh on 401 Unauthorized
-        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(tokens.RefreshToken))
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
-            if (refreshed != null)
+            // First check if host scanner has a fresh token on disk
+            var (freshAt, freshRt, freshExp) = HostCliScanner.ScanCodexTokens();
+            if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
             {
-                tokens = refreshed;
-                request = CreateUsageRequest(tokens.AccessToken, account.ProviderAccountId);
+                tokens.AccessToken = freshAt;
+                tokens.RefreshToken = freshRt ?? tokens.RefreshToken;
+                tokens.ExpiresAt = freshExp ?? HostCliScanner.ExtractJwtExpiration(freshAt);
+                vault.SaveTokens(account.Id, tokens);
+                request = CreateUsageRequest(tokens.AccessToken, effectiveAccountId);
                 response = await client.SendAsync(request, ct);
+            }
+
+            // If still unauthorized, try OAuth refresh token
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(tokens.RefreshToken))
+            {
+                var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
+                if (refreshed != null)
+                {
+                    tokens = refreshed;
+                    request = CreateUsageRequest(tokens.AccessToken, effectiveAccountId);
+                    response = await client.SendAsync(request, ct);
+                }
             }
         }
 
@@ -90,7 +139,7 @@ public class CodexProvider : IProviderAdapter
                 Content = new FormUrlEncodedContent(new Dictionary<string, string>
                 {
                     ["grant_type"] = "refresh_token",
-                    ["client_id"] = "pdlLIX2Y72MIlIKGarALjhRDuqitoAqJY7",
+                    ["client_id"] = ClientId,
                     ["refresh_token"] = tokens.RefreshToken
                 })
             };
@@ -109,9 +158,13 @@ public class CodexProvider : IProviderAdapter
                 {
                     tokens.RefreshToken = newRt;
                 }
-                if (root.TryGetPropertyInt64("expires_in", out var expIn))
+                if (root.TryGetPropertyInt64("expires_in", out var expIn) && expIn > 0)
                 {
                     tokens.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expIn);
+                }
+                else
+                {
+                    tokens.ExpiresAt = HostCliScanner.ExtractJwtExpiration(newAt);
                 }
 
                 vault.SaveTokens(accountId, tokens);
@@ -132,7 +185,9 @@ public class CodexProvider : IProviderAdapter
         if (string.IsNullOrEmpty(hostToken)) return Task.FromResult<string?>(null);
 
         // Find match by token or email
-        var match = accounts.FirstOrDefault(a => a.Provider == ProviderId.Codex && vault.GetTokens(a.Id)?.AccessToken == hostToken);
+        var (jwtAccountId, jwtEmail, _) = HostCliScanner.ExtractCodexJwtMetadata(hostToken);
+        var match = accounts.FirstOrDefault(a => a.Provider == ProviderId.Codex && 
+            (vault.GetTokens(a.Id)?.AccessToken == hostToken || (!string.IsNullOrEmpty(a.Email) && a.Email == jwtEmail)));
         return Task.FromResult(match?.Id);
     }
 
@@ -142,9 +197,19 @@ public class CodexProvider : IProviderAdapter
         var root = doc.RootElement;
 
         var windows = new List<UsageWindow>();
+        bool limitReached = false;
 
         if (root.TryGetProperty("rate_limit", out var rateLimit))
         {
+            if (rateLimit.TryGetProperty("limit_reached", out var lr) && (lr.ValueKind == JsonValueKind.True || (lr.ValueKind == JsonValueKind.String && bool.TryParse(lr.GetString(), out var lrB) && lrB)))
+            {
+                limitReached = true;
+            }
+            else if (rateLimit.TryGetProperty("allowed", out var al) && al.ValueKind == JsonValueKind.False)
+            {
+                limitReached = true;
+            }
+
             if (rateLimit.TryGetProperty("primary_window", out var pw))
             {
                 if (ParseWindow(pw, "Session", 18000) is { } w) windows.Add(w);
@@ -177,7 +242,8 @@ public class CodexProvider : IProviderAdapter
                 foreach (var prop in rateLimit.EnumerateObject())
                 {
                     if (prop.NameEquals("primary_window") || prop.NameEquals("secondary_window") ||
-                        prop.NameEquals("windows") || prop.NameEquals("limits"))
+                        prop.NameEquals("windows") || prop.NameEquals("limits") ||
+                        prop.NameEquals("allowed") || prop.NameEquals("limit_reached"))
                     {
                         continue;
                     }
@@ -209,6 +275,40 @@ public class CodexProvider : IProviderAdapter
                 foreach (var item in rootLimits.EnumerateArray())
                 {
                     if (ParseWindow(item, "Limit") is { } w) windows.Add(w);
+                }
+            }
+        }
+
+        // Apply limit_reached if indicated at the root rate_limit level
+        if (limitReached)
+        {
+            if (windows.Count == 0)
+            {
+                windows.Add(new UsageWindow
+                {
+                    Label = "Session",
+                    UsedPercent = 100f,
+                    ResetDescription = "Rate limit reached"
+                });
+            }
+            else if (windows[0].UsedPercent < 100f)
+            {
+                windows[0].UsedPercent = 100f;
+            }
+        }
+
+        // Check for rate_limit_upsell reset timestamp fallback
+        if (root.TryGetProperty("rate_limit_upsell", out var upsell) && upsell.ValueKind == JsonValueKind.Object)
+        {
+            if (upsell.TryGetPropertyInt64("reset_at", out var upReset) && upReset > 0)
+            {
+                var upsellResetAt = DateTimeOffset.FromUnixTimeSeconds(upReset);
+                foreach (var w in windows)
+                {
+                    if (!w.ResetAt.HasValue)
+                    {
+                        w.ResetAt = upsellResetAt;
+                    }
                 }
             }
         }
@@ -274,6 +374,10 @@ public class CodexProvider : IProviderAdapter
         else if (element.TryGetProperty("resets_at", out var rsaProp) && DateTimeOffset.TryParse(rsaProp.GetString(), out var parsedRsa))
         {
             resetAt = parsedRsa;
+        }
+        else if (element.TryGetPropertyInt64("reset_after_seconds", out var ras) && ras > 0)
+        {
+            resetAt = DateTimeOffset.UtcNow.AddSeconds(ras);
         }
 
         long? windowSec = null;

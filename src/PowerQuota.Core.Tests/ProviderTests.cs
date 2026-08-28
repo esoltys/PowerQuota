@@ -470,11 +470,89 @@ public class ProviderTests
     }
 
     [Fact]
+    public void CodexProvider_ParsesExhaustedRateLimitCorrectly()
+    {
+        var json = """
+        {
+            "user_id": "user-yvdPXiZnvCKcaf9kPGmO4sFU",
+            "account_id": "",
+            "email": "ericjamessoltys@outlook.com",
+            "plan_type": "free",
+            "rate_limit": {
+                "allowed": false,
+                "limit_reached": true,
+                "primary_window": {
+                    "used_percent": 100,
+                    "limit_window_seconds": 2592000,
+                    "reset_after_seconds": 2588508,
+                    "reset_at": 1790519173
+                },
+                "secondary_window": null
+            },
+            "rate_limit_upsell": {
+                "banner_type": "free_or_go_rate_limit_reached",
+                "title": "You're out of Codex messages",
+                "reset_at": 1790519173
+            }
+        }
+        """;
+
+        var snapshot = CodexProvider.ParseUsage(json);
+
+        Assert.Equal(ProviderId.Codex, snapshot.Provider);
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Monthly", snapshot.Windows[0].Label);
+        Assert.Equal(100.0f, snapshot.Windows[0].UsedPercent);
+        Assert.NotNull(snapshot.Windows[0].ResetAt);
+        Assert.Equal(1790519173, snapshot.Windows[0].ResetAt!.Value.ToUnixTimeSeconds());
+        Assert.Equal("ChatGPT Free", snapshot.Identity.Plan);
+        Assert.Equal("ericjamessoltys@outlook.com", snapshot.Identity.Email);
+    }
+
+    [Fact]
+    public void CodexProvider_ExtractsJwtExpirationAndMetadata()
+    {
+        // JWT with payload: {"exp":1788738523,"https://api.openai.com/auth":{"chatgpt_account_id":"acc-123","chatgpt_plan_type":"plus"},"https://api.openai.com/profile":{"email":"test@example.com"}}
+        var sampleJwt = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3ODg3Mzg1MjMsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2MtMTIzIiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJwbHVzIn0sImh0dHBzOi8vYXBpLm9wZW5haS5jb20vcHJvZmlsZSI6eyJlbWFpbCI6InRlc3RAZXhhbXBsZS5jb20ifX0.";
+
+        var exp = HostCliScanner.ExtractJwtExpiration(sampleJwt);
+        Assert.NotNull(exp);
+        Assert.Equal(1788738523, exp!.Value.ToUnixTimeSeconds());
+
+        var (accountId, email, plan) = HostCliScanner.ExtractCodexJwtMetadata(sampleJwt);
+        Assert.Equal("acc-123", accountId);
+        Assert.Equal("test@example.com", email);
+        Assert.Equal("plus", plan);
+    }
+
+    [Fact]
     public void HostCliScanner_GetCopilotActiveToken_DetectsToken()
     {
         var token = HostCliScanner.GetCopilotActiveToken();
         Assert.NotNull(token);
         Assert.NotEmpty(token);
+    }
+
+    [Fact]
+    public async Task CodexProvider_LiveFetch_IfTokenPresent_Succeeds()
+    {
+        var (at, rt, exp) = HostCliScanner.ScanCodexTokens();
+        if (!string.IsNullOrEmpty(at))
+        {
+            var vault = new WindowsCredentialVault();
+            var client = new HttpClient();
+            var provider = new CodexProvider();
+            var account = new AccountConfig
+            {
+                Id = "test-live-codex",
+                Provider = ProviderId.Codex,
+                Label = "Codex Live Test"
+            };
+
+            var snapshot = await provider.FetchAsync(account, vault, client);
+            Assert.Equal(ProviderId.Codex, snapshot.Provider);
+            Assert.NotEmpty(snapshot.Windows);
+        }
     }
 
     [Fact]

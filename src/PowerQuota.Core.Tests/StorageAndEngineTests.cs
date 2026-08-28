@@ -49,7 +49,8 @@ public class StorageAndEngineTests
             Label = "Claude Pro"
         });
 
-        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault());
+        var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
+        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
         
         var topCommands = provider.TopLevelCommands();
         Assert.NotEmpty(topCommands);
@@ -80,7 +81,8 @@ public class StorageAndEngineTests
             Label = "Claude Pro"
         });
 
-        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault());
+        var refreshService = new QuotaRefreshService(storage, new WindowsCredentialVault(), autoStartTimer: false);
+        var provider = new PowerQuota.CommandPalette.Providers.PowerQuotaCommandProvider(storage, new WindowsCredentialVault(), refreshService);
         
         // Exact Id match on top-level overview
         var overviewItem = provider.GetCommandItem("powerquota-overview");

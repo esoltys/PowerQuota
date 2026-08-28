@@ -89,8 +89,86 @@ public static class HostCliScanner
                     }
                 }
 
+                if (!exp.HasValue && !string.IsNullOrEmpty(at))
+                {
+                    exp = ExtractJwtExpiration(at);
+                }
+
                 return (at, rt, exp);
             }
+        }
+        catch { }
+        return (null, null, null);
+    }
+
+    public static DateTimeOffset? ExtractJwtExpiration(string? jwt)
+    {
+        if (string.IsNullOrWhiteSpace(jwt)) return null;
+        var parts = jwt.Split('.');
+        if (parts.Length < 2) return null;
+
+        try
+        {
+            string payload = parts[1].Replace('-', '+').Replace('_', '/');
+            switch (payload.Length % 4)
+            {
+                case 2: payload += "=="; break;
+                case 3: payload += "="; break;
+            }
+            var jsonBytes = Convert.FromBase64String(payload);
+            using var doc = JsonDocument.Parse(jsonBytes);
+            if (doc.RootElement.TryGetProperty("exp", out var expProp) && expProp.TryGetInt64(out var expEpoch) && expEpoch > 0)
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(expEpoch);
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static (string? AccountId, string? Email, string? Plan) ExtractCodexJwtMetadata(string? jwt)
+    {
+        if (string.IsNullOrWhiteSpace(jwt)) return (null, null, null);
+        var parts = jwt.Split('.');
+        if (parts.Length < 2) return (null, null, null);
+
+        try
+        {
+            string payload = parts[1].Replace('-', '+').Replace('_', '/');
+            switch (payload.Length % 4)
+            {
+                case 2: payload += "=="; break;
+                case 3: payload += "="; break;
+            }
+            var jsonBytes = Convert.FromBase64String(payload);
+            using var doc = JsonDocument.Parse(jsonBytes);
+            string? accountId = null;
+            string? email = null;
+            string? plan = null;
+
+            if (doc.RootElement.TryGetProperty("https://api.openai.com/auth", out var authObj) && authObj.ValueKind == JsonValueKind.Object)
+            {
+                if (authObj.TryGetProperty("chatgpt_account_id", out var aid) && aid.GetString() is { } aStr && !string.IsNullOrWhiteSpace(aStr))
+                {
+                    accountId = aStr;
+                }
+                if (authObj.TryGetProperty("chatgpt_plan_type", out var pt) && pt.GetString() is { } ptStr && !string.IsNullOrWhiteSpace(ptStr))
+                {
+                    plan = ptStr;
+                }
+            }
+            if (doc.RootElement.TryGetProperty("https://api.openai.com/profile", out var profObj) && profObj.ValueKind == JsonValueKind.Object)
+            {
+                if (profObj.TryGetProperty("email", out var em) && em.GetString() is { } emStr && !string.IsNullOrWhiteSpace(emStr))
+                {
+                    email = emStr;
+                }
+            }
+            else if (doc.RootElement.TryGetProperty("email", out var directEm) && directEm.GetString() is { } demStr && !string.IsNullOrWhiteSpace(demStr))
+            {
+                email = demStr;
+            }
+            return (accountId, email, plan);
         }
         catch { }
         return (null, null, null);

@@ -15,7 +15,10 @@ public class SettingsFormPage : ListPage
     {
         _configStorage = configStorage;
         _refreshService = refreshService;
+        Id = "action-settings";
+        Name = "PowerQuota Settings";
         Title = "PowerQuota Settings";
+        Icon = new IconInfo("\uE713");
         PlaceholderText = "Select a setting to configure...";
     }
 
