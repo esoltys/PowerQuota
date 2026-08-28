@@ -148,6 +148,7 @@ public class SettingsFormPage : ListPage
     private void Save(PowerQuotaConfig config)
     {
         _configStorage.Save(config);
+        _refreshService.UpdateRefreshInterval(config.RefreshIntervalMinutes);
         RaiseItemsChanged(GetItems().Length);
         _refreshService.NotifyStateChanged();
     }

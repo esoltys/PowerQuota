@@ -145,5 +145,75 @@ public class StorageAndEngineTests
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Minimax);
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Kimi);
     }
+
+    [Fact]
+    public void QuotaRefreshService_UpdateRefreshInterval_UpdatesIntervalWithoutRecreatingService()
+    {
+        var configStorage = new ConfigStorage();
+        configStorage.Current.RefreshIntervalMinutes = 5;
+        var vault = new WindowsCredentialVault();
+
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: true);
+
+        Assert.Equal(5, service.RefreshIntervalMinutes);
+
+        service.UpdateRefreshInterval(15);
+        Assert.Equal(15, service.RefreshIntervalMinutes);
+
+        service.UpdateRefreshInterval(1);
+        Assert.Equal(1, service.RefreshIntervalMinutes);
+
+        // Clamping check: <= 0 should clamp to 1 minute
+        service.UpdateRefreshInterval(0);
+        Assert.Equal(1, service.RefreshIntervalMinutes);
+
+        service.UpdateRefreshInterval(-5);
+        Assert.Equal(1, service.RefreshIntervalMinutes);
+    }
+
+    [Fact]
+    public void QuotaRefreshService_UpdateRefreshInterval_SafeWhenTimerDisabledOrDisposed()
+    {
+        var configStorage = new ConfigStorage();
+        configStorage.Current.RefreshIntervalMinutes = 5;
+        var vault = new WindowsCredentialVault();
+
+        var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        service.UpdateRefreshInterval(30);
+        Assert.Equal(30, service.RefreshIntervalMinutes);
+
+        service.Dispose();
+        // Calling update on disposed service does not throw ObjectDisposedException
+        service.UpdateRefreshInterval(60);
+        Assert.Equal(60, service.RefreshIntervalMinutes);
+    }
+
+    [Fact]
+    public void SettingsFormPage_IntervalSelection_UpdatesRefreshServiceAndConfig()
+    {
+        var configStorage = new ConfigStorage();
+        configStorage.Current.RefreshIntervalMinutes = 5;
+        var vault = new WindowsCredentialVault();
+        using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+        var settingsPage = new PowerQuota.CommandPalette.Pages.SettingsFormPage(configStorage, service);
+
+        var items = settingsPage.GetItems();
+        var intervalItem = items.FirstOrDefault(i => i.Title == "Auto-Refresh Interval");
+        Assert.NotNull(intervalItem);
+
+        var choicePage = intervalItem!.Command as PowerQuota.CommandPalette.Pages.SettingChoicePage;
+        Assert.NotNull(choicePage);
+
+        var choices = choicePage!.GetItems();
+        var thirtyMinChoice = choices.FirstOrDefault(c => c.Title == "Every 30 Minutes");
+        Assert.NotNull(thirtyMinChoice);
+
+        var command = thirtyMinChoice!.Command as Microsoft.CommandPalette.Extensions.Toolkit.AnonymousCommand;
+        Assert.NotNull(command);
+        command!.Invoke();
+
+        Assert.Equal(30, service.RefreshIntervalMinutes);
+        Assert.Equal(30, configStorage.Current.RefreshIntervalMinutes);
+    }
 }
 
