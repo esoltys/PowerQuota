@@ -50,7 +50,7 @@ public class AddAccountFormPage : ListPage
         ProviderId.Codex => "Scan local ~/.codex/auth.json or configure account",
         ProviderId.Claude => "Scan local ~/.claude/auth.json credentials",
         ProviderId.Cursor => "Scan local Cursor IDE database (state.vscdb)",
-        ProviderId.Gemini => "Scan local ~/.gemini/auth.json credentials",
+        ProviderId.Gemini => "Scan Antigravity credentials from Windows Credential Manager",
         ProviderId.Copilot => "Scan local GitHub Copilot credentials",
         ProviderId.Minimax => "Configure Minimax API key",
         ProviderId.Kimi => "Scan OpenCode ~/.opencode/auth.json or configure API key",

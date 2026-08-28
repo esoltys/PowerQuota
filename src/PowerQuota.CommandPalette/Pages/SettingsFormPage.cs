@@ -129,11 +129,39 @@ public class SettingsFormPage : ListPage
             }
         );
 
-        items.Add(new ListItem(new CommandItem(refreshIntervalPage))
+        items.Add(new ListItem(refreshIntervalPage)
         {
             Title = "Auto-Refresh Interval",
             Subtitle = $"Current: Every {config.RefreshIntervalMinutes} minute(s) • Click to configure",
             Icon = new IconInfo("\uE72C")
+        });
+
+        // 5. Gemini 3rd-Party Limits (Claude / GPT)
+        string gemini3pLabel = config.GeminiIncludeThirdPartyModels ? "Show Claude & GPT Limits" : "Hide Claude & GPT Limits (Gemini Only)";
+        var gemini3pPage = new SettingChoicePage(
+            title: "Gemini 3rd-Party Limits (Claude / GPT)",
+            choicesProvider: () =>
+            {
+                var cur = _configStorage.Current;
+                return new[]
+                {
+                    new SettingChoice("Hide Claude & GPT Limits (Gemini Only)", "Only show Gemini 5-hour and weekly limits in Dock (Recommended)", !cur.GeminiIncludeThirdPartyModels, () =>
+                    {
+                        UpdateSetting(cfg => cfg.GeminiIncludeThirdPartyModels = false);
+                    }),
+                    new SettingChoice("Show Claude & GPT Limits", "Include Claude and GPT rate limits alongside Gemini in Dock", cur.GeminiIncludeThirdPartyModels, () =>
+                    {
+                        UpdateSetting(cfg => cfg.GeminiIncludeThirdPartyModels = true);
+                    })
+                };
+            }
+        );
+
+        items.Add(new ListItem(gemini3pPage)
+        {
+            Title = "Gemini 3rd-Party Limits (Claude / GPT)",
+            Subtitle = $"Current: {gemini3pLabel} • Click to configure",
+            Icon = new IconInfo("\uE74C")
         });
 
         return items.ToArray();

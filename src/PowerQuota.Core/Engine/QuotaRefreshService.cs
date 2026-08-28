@@ -462,8 +462,9 @@ public class QuotaRefreshService : IDisposable
                         return new AccountConfig { Provider = ProviderId.Cursor, Label = "Cursor (IDE)" };
                     break;
                 case ProviderId.Gemini:
-                    if (!string.IsNullOrEmpty(HostCliScanner.GetGeminiActiveToken()))
-                        return new AccountConfig { Provider = ProviderId.Gemini, Label = "Gemini (CLI)" };
+                    var (gAt, gRt, _, gEmail) = HostCliScanner.ScanGeminiAntigravityCredentials();
+                    if (!string.IsNullOrEmpty(gAt) || !string.IsNullOrEmpty(gRt))
+                        return new AccountConfig { Provider = ProviderId.Gemini, Label = "Gemini", Email = gEmail };
                     break;
                 case ProviderId.Copilot:
                     if (!string.IsNullOrEmpty(HostCliScanner.GetCopilotActiveToken()))

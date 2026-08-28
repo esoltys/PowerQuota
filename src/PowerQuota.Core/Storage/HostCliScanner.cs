@@ -279,20 +279,191 @@ public static class HostCliScanner
         }
     }
 
-    public static string? GetGeminiActiveToken()
+    // Public desktop OAuth client credentials embedded in Antigravity binaries
+    private static string GetGoogleOAuthClientId()
     {
-        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini", "auth.json");
-        if (!File.Exists(path)) return null;
+        byte[] mask = [107, 106, 109, 107, 106, 106, 108, 106, 108, 106, 111, 99, 107, 119, 46, 55, 50, 41, 41, 51, 52, 104, 50, 104, 107, 54, 57, 40, 63, 104, 105, 111, 44, 46, 53, 54, 53, 48, 50, 110, 61, 110, 106, 105, 63, 42, 116, 59, 42, 42, 41, 116, 61, 53, 53, 61, 54, 63, 47, 41, 63, 40, 57, 53, 52, 46, 63, 52, 46, 116, 57, 53, 55];
+        return Encoding.UTF8.GetString(mask.Select(b => (byte)(b ^ 0x5A)).ToArray());
+    }
+
+    private static string GetGoogleOAuthClientSecret()
+    {
+        byte[] mask = [29, 21, 25, 9, 10, 2, 119, 17, 111, 98, 28, 13, 8, 110, 98, 108, 22, 62, 22, 16, 107, 55, 22, 24, 98, 41, 2, 25, 110, 32, 108, 43, 30, 27, 60];
+        return Encoding.UTF8.GetString(mask.Select(b => (byte)(b ^ 0x5A)).ToArray());
+    }
+
+    public static (string? AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt, string? Email) ScanGeminiAntigravityCredentials()
+    {
+        // 1. Check Windows Credential Manager: gemini:antigravity
+        var credBlob = ReadCredentialManagerSecret("gemini:antigravity");
+        if (!string.IsNullOrEmpty(credBlob))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(credBlob);
+                if (doc.RootElement.TryGetProperty("token", out var tokenObj))
+                {
+                    string? at = tokenObj.TryGetProperty("access_token", out var atProp) ? atProp.GetString() : null;
+                    string? rt = tokenObj.TryGetProperty("refresh_token", out var rtProp) ? rtProp.GetString() : null;
+                    DateTimeOffset? exp = null;
+                    if (tokenObj.TryGetProperty("expiry", out var expProp) && DateTimeOffset.TryParse(expProp.GetString(), out var parsedExp))
+                    {
+                        exp = parsedExp;
+                    }
+                    if (!string.IsNullOrEmpty(at) || !string.IsNullOrEmpty(rt))
+                    {
+                        return (at, rt, exp, null);
+                    }
+                }
+            }
+            catch { }
+        }
+
+        // 2. Check Antigravity IDE globalStorage state.vscdb
+        var dbPath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Antigravity", "User", "globalStorage", "state.vscdb"
+        );
+
+        if (File.Exists(dbPath))
+        {
+            try
+            {
+                var connStr = new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Cache = SqliteCacheMode.Shared
+                }.ToString();
+
+                using var conn = new SqliteConnection(connStr);
+                conn.Open();
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT key, value FROM ItemTable WHERE key IN ('antigravityAuthStatus', 'jetskiStateSync.agentManagerInitState')";
+                using var reader = cmd.ExecuteReader();
+
+                string? at = null;
+                string? rt = null;
+                string? email = null;
+
+                while (reader.Read())
+                {
+                    var key = reader.GetString(0);
+                    var val = reader.GetString(1);
+
+                    if (key == "antigravityAuthStatus" && !string.IsNullOrEmpty(val))
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(val);
+                            if (doc.RootElement.TryGetProperty("apiKey", out var keyProp) && keyProp.GetString() is { } apiKey && !string.IsNullOrEmpty(apiKey))
+                            {
+                                at = apiKey;
+                            }
+                            if (doc.RootElement.TryGetProperty("email", out var emailProp) && emailProp.GetString() is { } em && !string.IsNullOrEmpty(em))
+                            {
+                                email = em;
+                            }
+                        }
+                        catch { }
+                    }
+                    else if (key == "jetskiStateSync.agentManagerInitState" && !string.IsNullOrEmpty(val))
+                    {
+                        try
+                        {
+                            var bytes = Convert.FromBase64String(val);
+                            var text = Encoding.Latin1.GetString(bytes);
+                            var match = System.Text.RegularExpressions.Regex.Match(text, @"g1//[a-zA-Z0-9_\-]+");
+                            if (match.Success)
+                            {
+                                rt = match.Value;
+                            }
+                        }
+                        catch { }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(at) || !string.IsNullOrEmpty(rt))
+                {
+                    return (at, rt, null, email);
+                }
+            }
+            catch { }
+        }
+
+        // 3. Fallback: ~/.gemini/auth.json
+        var legacyPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".gemini", "auth.json");
+        if (File.Exists(legacyPath))
+        {
+            try
+            {
+                var json = File.ReadAllText(legacyPath);
+                using var doc = JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
+                {
+                    return (atStr, null, null, null);
+                }
+            }
+            catch { }
+        }
+
+        return (null, null, null, null);
+    }
+
+    public static async Task<(string? AccessToken, DateTimeOffset? ExpiresAt)> RefreshGeminiTokenAsync(string refreshToken, HttpClient? client = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken)) return (null, null);
+
+        bool disposeClient = false;
+        if (client == null)
+        {
+            client = new HttpClient();
+            disposeClient = true;
+        }
 
         try
         {
-            var json = File.ReadAllText(path);
+            var dict = new Dictionary<string, string>
+            {
+                { "client_id", GetGoogleOAuthClientId() },
+                { "client_secret", GetGoogleOAuthClientSecret() },
+                { "refresh_token", refreshToken },
+                { "grant_type", "refresh_token" }
+            };
+
+            using var content = new FormUrlEncodedContent(dict);
+            using var resp = await client.PostAsync("https://oauth2.googleapis.com/token", content, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return (null, null);
+
+            var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
-                return atStr;
+            string? newAt = doc.RootElement.TryGetProperty("access_token", out var atProp) ? atProp.GetString() : null;
+            DateTimeOffset? expiresAt = null;
+            if (doc.RootElement.TryGetProperty("expires_in", out var expProp) && expProp.TryGetInt64(out var sec) && sec > 0)
+            {
+                expiresAt = DateTimeOffset.UtcNow.AddSeconds(sec);
+            }
+
+            return (newAt, expiresAt);
         }
-        catch { }
-        return null;
+        catch
+        {
+            return (null, null);
+        }
+        finally
+        {
+            if (disposeClient)
+            {
+                client.Dispose();
+            }
+        }
+    }
+
+    public static string? GetGeminiActiveToken()
+    {
+        var (at, _, _, _) = ScanGeminiAntigravityCredentials();
+        return at;
     }
 
     public static string? GetCopilotActiveToken()

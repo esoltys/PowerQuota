@@ -222,6 +222,11 @@ public class PowerQuotaCommandProvider : CommandProvider
                 {
                     foreach (var window in snapshot.Windows)
                     {
+                        if (pid == ProviderId.Gemini && !config.GeminiIncludeThirdPartyModels && window.Label.StartsWith("Claude/GPT", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
                         float percent = config.DisplayRemainingNotUsed ? Math.Clamp(100f - window.UsedPercent, 0f, 100f) : window.UsedPercent;
                         string pctLabel = config.DisplayRemainingNotUsed ? $"{percent:0}% left" : $"{percent:0}% used";
 
@@ -258,11 +263,17 @@ public class PowerQuotaCommandProvider : CommandProvider
 
                         var icon = ProviderIcons.GetIcon(pid);
 
+                        string bandName = window.Label.StartsWith(pid.GetLabel(), StringComparison.OrdinalIgnoreCase)
+                            ? $"{window.Label} Quota"
+                            : $"{pid.GetLabel()} - {window.Label} Quota";
+
+                        string sanitizedLabel = window.Label.Replace('/', '-').Replace(' ', '-').Replace("(", "").Replace(")", "");
+
                         var page = new ProviderDetailsPage(pid, _refreshService, _configStorage, _vault)
                         {
-                            Id = $"dock-{pid}-{accountKey}-{window.Label}",
-                            Name = $"{pid.GetLabel()} - {window.Label}",
-                            Title = $"{pid.GetLabel()} - {window.Label}",
+                            Id = $"dock-{pid}-{accountKey}-{sanitizedLabel}",
+                            Name = bandName,
+                            Title = bandName,
                             Icon = icon
                         };
                         bands.Add(new CommandItem(page)
@@ -277,8 +288,8 @@ public class PowerQuotaCommandProvider : CommandProvider
                                     _ = _refreshService.RefreshProviderAsync(pid);
                                 })
                                 {
-                                    Id = $"dock-refresh-{pid}-{accountKey}-{window.Label}",
-                                    Name = $"Refresh {pid.GetLabel()} Quota",
+                                    Id = $"dock-refresh-{pid}-{accountKey}-{sanitizedLabel}",
+                                    Name = $"Refresh {bandName}",
                                     Icon = new IconInfo("\uE72C")
                                 })
                                 {
