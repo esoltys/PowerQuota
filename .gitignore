@@ -33,3 +33,6 @@ bundle_mapping.txt
 *.pfx
 *.cer
 
+# Local AI tooling
+.claude/
+
