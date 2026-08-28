@@ -145,5 +145,24 @@ public class StorageAndEngineTests
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Minimax);
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Kimi);
     }
+
+    [Fact]
+    public void PowerQuotaExtension_GetProvider_ReturnsCommandProvider_AndHandlesLoggingSafely()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        var provider = extension.GetProvider(Microsoft.CommandPalette.Extensions.ProviderType.Commands);
+        Assert.NotNull(provider);
+
+        var nullProvider = extension.GetProvider((Microsoft.CommandPalette.Extensions.ProviderType)999);
+        Assert.Null(nullProvider);
+    }
+
+    [Fact]
+    public void PowerQuotaExtension_Dispose_SignalsDisposedEvent()
+    {
+        var extension = new PowerQuota.CommandPalette.PowerQuotaExtension();
+        extension.Dispose();
+        Assert.True(PowerQuota.CommandPalette.PowerQuotaExtension.DisposedEvent.WaitOne(0));
+    }
 }
 
