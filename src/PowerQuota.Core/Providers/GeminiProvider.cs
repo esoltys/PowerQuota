@@ -7,20 +7,24 @@ namespace PowerQuota.Core.Providers;
 
 public class GeminiProvider : IProviderAdapter
 {
-    private const string LoadCodeAssistUrl = "https://cloudaicompanion.googleapis.com/v1:loadCodeAssist";
-    private const string RetrieveQuotaUrl = "https://cloudaicompanion.googleapis.com/v1/projects/{0}:retrieveUserQuota";
+    private const string LoadCodeAssistUrl = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    private const string RetrieveQuotaSummaryUrl = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 
     public ProviderId Id => ProviderId.Gemini;
 
     public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
     {
         var tokens = vault.GetTokens(account.Id) ?? new StoredTokens();
-        if (string.IsNullOrEmpty(tokens.AccessToken))
+
+        if (string.IsNullOrEmpty(tokens.AccessToken) && string.IsNullOrEmpty(tokens.RefreshToken))
         {
-            var hostToken = HostCliScanner.GetGeminiActiveToken();
-            if (!string.IsNullOrEmpty(hostToken))
+            var (scannedAt, scannedRt, scannedExp, scannedEmail) = HostCliScanner.ScanGeminiAntigravityCredentials();
+            if (!string.IsNullOrEmpty(scannedAt) || !string.IsNullOrEmpty(scannedRt))
             {
-                tokens.AccessToken = hostToken;
+                tokens.AccessToken = scannedAt ?? string.Empty;
+                tokens.RefreshToken = scannedRt;
+                tokens.ExpiresAt = scannedExp;
+                vault.SaveTokens(account.Id, tokens);
             }
             else
             {
@@ -28,57 +32,100 @@ public class GeminiProvider : IProviderAdapter
             }
         }
 
-        string? project = null;
-        string? tier = null;
-
-        // Step 1: Load code assist to get active project and tier
-        using (var loadReq = new HttpRequestMessage(HttpMethod.Post, LoadCodeAssistUrl))
+        // Auto-refresh access token if close to expiry
+        if (tokens.ExpiresAt.HasValue && tokens.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(2) && !string.IsNullOrEmpty(tokens.RefreshToken))
         {
-            loadReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
-            loadReq.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-
-            using var loadResp = await client.SendAsync(loadReq, ct);
-            if (loadResp.StatusCode == System.Net.HttpStatusCode.Unauthorized || loadResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            var (refreshedAt, refreshedExp) = await HostCliScanner.RefreshGeminiTokenAsync(tokens.RefreshToken, client, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(refreshedAt))
             {
+                tokens.AccessToken = refreshedAt;
+                tokens.ExpiresAt = refreshedExp;
+                vault.SaveTokens(account.Id, tokens);
+            }
+        }
+
+        if (string.IsNullOrEmpty(tokens.AccessToken))
+        {
+            throw new InvalidOperationException("Gemini login required");
+        }
+
+        string? planName = null;
+
+        async Task<string> SendAuthorizedPostAsync(string url)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+            req.Headers.Add("User-Agent", "antigravity/2.11.0");
+            req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+            using var resp = await client.SendAsync(req, ct).ConfigureAwait(false);
+            if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized || resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                if (!string.IsNullOrEmpty(tokens.RefreshToken))
+                {
+                    var (refreshedAt, refreshedExp) = await HostCliScanner.RefreshGeminiTokenAsync(tokens.RefreshToken, client, ct).ConfigureAwait(false);
+                    if (!string.IsNullOrEmpty(refreshedAt))
+                    {
+                        tokens.AccessToken = refreshedAt;
+                        tokens.ExpiresAt = refreshedExp;
+                        vault.SaveTokens(account.Id, tokens);
+
+                        using var retryReq = new HttpRequestMessage(HttpMethod.Post, url);
+                        retryReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+                        retryReq.Headers.Add("User-Agent", "antigravity/2.11.0");
+                        retryReq.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+                        using var retryResp = await client.SendAsync(retryReq, ct).ConfigureAwait(false);
+                        if (retryResp.IsSuccessStatusCode)
+                        {
+                            return await retryResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        }
+                    }
+                }
+
                 throw new UnauthorizedAccessException("Gemini session expired");
             }
 
-            loadResp.EnsureSuccessStatusCode();
-            var loadJson = await loadResp.Content.ReadAsStringAsync(ct);
+            resp.EnsureSuccessStatusCode();
+            return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        }
+
+        // Step 1: Load code assist for plan info
+        try
+        {
+            var loadJson = await SendAuthorizedPostAsync(LoadCodeAssistUrl).ConfigureAwait(false);
             using var loadDoc = JsonDocument.Parse(loadJson);
-
-            if (loadDoc.RootElement.TryGetProperty("cloudaicompanionProject", out var cp)) project = cp.GetString();
-            if (loadDoc.RootElement.TryGetProperty("currentTier", out var ctObj) && ctObj.TryGetProperty("id", out var tid)) tier = tid.GetString();
+            if (loadDoc.RootElement.TryGetProperty("paidTier", out var pt) && pt.TryGetProperty("name", out var ptName))
+            {
+                planName = ptName.GetString();
+            }
+            else if (loadDoc.RootElement.TryGetProperty("currentTier", out var ctObj) && ctObj.TryGetProperty("id", out var tid))
+            {
+                planName = tid.GetString();
+            }
         }
-
-        if (string.IsNullOrEmpty(project))
+        catch (UnauthorizedAccessException)
         {
-            project = "default";
+            throw;
         }
-
-        // Step 2: Retrieve quota buckets
-        var quotaUrl = string.Format(RetrieveQuotaUrl, project);
-        using var quotaReq = new HttpRequestMessage(HttpMethod.Post, quotaUrl);
-        quotaReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
-        quotaReq.Content = new StringContent($"{{\"project\":\"{project}\"}}", System.Text.Encoding.UTF8, "application/json");
-
-        using var quotaResp = await client.SendAsync(quotaReq, ct);
-        if (quotaResp.StatusCode == System.Net.HttpStatusCode.Unauthorized || quotaResp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        catch
         {
-            throw new UnauthorizedAccessException("Gemini session expired");
+            // Non-fatal, continue to retrieve quota summary
         }
-        quotaResp.EnsureSuccessStatusCode();
-        var quotaJson = await quotaResp.Content.ReadAsStringAsync(ct);
 
-        return ParseUsage(quotaJson, tier, account);
+        // Step 2: Retrieve quota summary
+        var quotaJson = await SendAuthorizedPostAsync(RetrieveQuotaSummaryUrl).ConfigureAwait(false);
+
+        return ParseUsage(quotaJson, planName, account);
     }
 
     public Task<string?> GetSystemActiveAccountIdAsync(IReadOnlyList<AccountConfig> accounts, WindowsCredentialVault vault)
     {
-        var hostToken = HostCliScanner.GetGeminiActiveToken();
-        if (string.IsNullOrEmpty(hostToken)) return Task.FromResult<string?>(null);
+        var (at, rt, _, _) = HostCliScanner.ScanGeminiAntigravityCredentials();
+        if (string.IsNullOrEmpty(at) && string.IsNullOrEmpty(rt)) return Task.FromResult<string?>(null);
 
-        var match = accounts.FirstOrDefault(a => a.Provider == ProviderId.Gemini && vault.GetTokens(a.Id)?.AccessToken == hostToken);
+        var match = accounts.FirstOrDefault(a => a.Provider == ProviderId.Gemini &&
+            (vault.GetTokens(a.Id)?.AccessToken == at || (rt != null && vault.GetTokens(a.Id)?.RefreshToken == rt)));
         return Task.FromResult(match?.Id);
     }
 
@@ -88,9 +135,69 @@ public class GeminiProvider : IProviderAdapter
         var root = doc.RootElement;
         var windows = new List<UsageWindow>();
 
-        if (root.TryGetProperty("buckets", out var buckets))
+        if (root.TryGetProperty("groups", out var groups) && groups.ValueKind == JsonValueKind.Array)
         {
-            foreach (var bucket in buckets.EnumerateArray())
+            foreach (var group in groups.EnumerateArray())
+            {
+                string groupName = group.TryGetProperty("displayName", out var gn) ? gn.GetString() ?? "" : "";
+                bool isGeminiGroup = groupName.Contains("Gemini", StringComparison.OrdinalIgnoreCase);
+                bool isClaudeGptGroup = groupName.Contains("Claude", StringComparison.OrdinalIgnoreCase) || groupName.Contains("GPT", StringComparison.OrdinalIgnoreCase);
+
+                if (group.TryGetProperty("buckets", out var buckets) && buckets.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var bucket in buckets.EnumerateArray())
+                    {
+                        string bucketWindow = bucket.TryGetProperty("window", out var bw) ? bw.GetString() ?? "" : "";
+                        string bucketDisplayName = bucket.TryGetProperty("displayName", out var bdn) ? bdn.GetString() ?? "" : "";
+                        string? description = bucket.TryGetProperty("description", out var bd) ? bd.GetString() : null;
+                        float remainingFraction = bucket.TryGetProperty("remainingFraction", out var rf) ? rf.GetSingle() : 1f;
+                        float usedPercent = (1f - remainingFraction) * 100f;
+
+                        DateTimeOffset? resetTime = null;
+                        if (bucket.TryGetProperty("resetTime", out var rt) && DateTimeOffset.TryParse(rt.GetString(), out var parsedRt))
+                        {
+                            resetTime = parsedRt;
+                        }
+
+                        string windowSuffix = bucketWindow.Equals("5h", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Five Hour", StringComparison.OrdinalIgnoreCase)
+                            ? "5h"
+                            : bucketWindow.Equals("weekly", StringComparison.OrdinalIgnoreCase) || bucketDisplayName.Contains("Weekly", StringComparison.OrdinalIgnoreCase)
+                                ? "Weekly"
+                                : bucketWindow;
+
+                        string label;
+                        string resetDesc;
+
+                        if (isGeminiGroup)
+                        {
+                            label = string.IsNullOrEmpty(windowSuffix) ? "Gemini" : $"Gemini ({windowSuffix})";
+                            resetDesc = string.IsNullOrEmpty(description) ? $"Gemini {windowSuffix} Quota" : description;
+                        }
+                        else if (isClaudeGptGroup)
+                        {
+                            label = string.IsNullOrEmpty(windowSuffix) ? "Claude/GPT" : $"Claude/GPT ({windowSuffix})";
+                            resetDesc = string.IsNullOrEmpty(description) ? $"Claude & GPT {windowSuffix} Quota" : description;
+                        }
+                        else
+                        {
+                            label = string.IsNullOrEmpty(groupName) ? bucketDisplayName : $"{groupName} ({windowSuffix})";
+                            resetDesc = description ?? $"{label} Quota";
+                        }
+
+                        windows.Add(new UsageWindow
+                        {
+                            Label = label,
+                            UsedPercent = Math.Clamp(usedPercent, 0f, 100f),
+                            ResetAt = resetTime,
+                            ResetDescription = resetDesc
+                        });
+                    }
+                }
+            }
+        }
+        else if (root.TryGetProperty("buckets", out var legacyBuckets) && legacyBuckets.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var bucket in legacyBuckets.EnumerateArray())
             {
                 string modelId = bucket.TryGetProperty("modelId", out var mid) ? mid.GetString() ?? "" : "";
                 float remainingFraction = bucket.TryGetProperty("remainingFraction", out var rf) ? rf.GetSingle() : 1f;
@@ -121,7 +228,10 @@ public class GeminiProvider : IProviderAdapter
             "free-tier" => "Free",
             "standard-tier" => "Standard",
             "enterprise-tier" => "Enterprise",
-            _ => "Gemini Code Assist"
+            "g1-pro-tier" => "Google AI Pro",
+            "g1-ultra-tier" => "Google AI Ultra",
+            null or "" => "Google AI",
+            _ => tier
         };
 
         return new UsageSnapshot

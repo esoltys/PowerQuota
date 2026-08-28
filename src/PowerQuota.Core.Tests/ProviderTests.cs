@@ -287,6 +287,74 @@ public class ProviderTests
     }
 
     [Fact]
+    public void GeminiProvider_ParsesAntigravityGroupedQuotaSummary()
+    {
+        var json = """
+        {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "description": "Models within this group: Gemini Flash, Gemini Pro",
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-weekly",
+                            "displayName": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "resetTime": "2026-09-01T19:39:19Z",
+                            "description": "You have used some of your weekly limit, it will fully refresh in 4 days.",
+                            "remainingFraction": 0.5433856
+                        },
+                        {
+                            "bucketId": "gemini-5h",
+                            "displayName": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "resetTime": "2026-08-28T20:23:59Z",
+                            "description": "You have used some of your 5-hour limit, it will fully refresh in 1 hour, 9 minutes.",
+                            "remainingFraction": 0.2460168
+                        }
+                    ]
+                },
+                {
+                    "displayName": "Claude and GPT models",
+                    "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+                    "buckets": [
+                        {
+                            "bucketId": "3p-weekly",
+                            "displayName": "Weekly Limit Remaining",
+                            "window": "weekly",
+                            "resetTime": "2026-08-29T01:41:04Z",
+                            "description": "You have used some of your weekly limit, it will fully refresh in 6 hours, 26 minutes.",
+                            "remainingFraction": 0.66958416
+                        },
+                        {
+                            "bucketId": "3p-5h",
+                            "displayName": "Five Hour Limit Remaining",
+                            "window": "5h",
+                            "resetTime": "2026-08-29T00:14:20Z",
+                            "remainingFraction": 1.0
+                        }
+                    ]
+                }
+            ]
+        }
+        """;
+
+        var snapshot = GeminiProvider.ParseUsage(json, "g1-pro-tier");
+
+        Assert.Equal(ProviderId.Gemini, snapshot.Provider);
+        Assert.Equal(4, snapshot.Windows.Count);
+        Assert.Equal("Gemini (Weekly)", snapshot.Windows[0].Label);
+        Assert.Equal(45.66f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Equal("Gemini (5h)", snapshot.Windows[1].Label);
+        Assert.Equal(75.40f, snapshot.Windows[1].UsedPercent, 1);
+        Assert.Equal("Claude/GPT (Weekly)", snapshot.Windows[2].Label);
+        Assert.Equal(33.04f, snapshot.Windows[2].UsedPercent, 1);
+        Assert.Equal("Claude/GPT (5h)", snapshot.Windows[3].Label);
+        Assert.Equal(0.0f, snapshot.Windows[3].UsedPercent, 1);
+        Assert.Equal("Google AI Pro", snapshot.Identity.Plan);
+    }
+
+    [Fact]
     public void GeminiProvider_ParsesBucketsIntoFlashAndLite()
     {
         var json = """
@@ -558,6 +626,41 @@ public class ProviderTests
                 var snapshot = await provider.FetchAsync(account, vault, client);
                 Assert.Equal(ProviderId.Codex, snapshot.Provider);
                 Assert.NotEmpty(snapshot.Windows);
+            }
+            finally
+            {
+                if (Directory.Exists(tempDir))
+                {
+                    try { Directory.Delete(tempDir, recursive: true); } catch { }
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task GeminiProvider_LiveFetch_IfTokenPresent_Succeeds()
+    {
+        var (at, rt, _, _) = HostCliScanner.ScanGeminiAntigravityCredentials();
+        if (!string.IsNullOrEmpty(at) || !string.IsNullOrEmpty(rt))
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "PowerQuotaTests", Guid.NewGuid().ToString());
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                var vault = new WindowsCredentialVault(tempDir);
+                using var client = new HttpClient();
+                var provider = new GeminiProvider();
+                var account = new AccountConfig
+                {
+                    Id = "test-live-gemini",
+                    Provider = ProviderId.Gemini,
+                    Label = "Gemini Live Test"
+                };
+
+                var snapshot = await provider.FetchAsync(account, vault, client);
+                Assert.Equal(ProviderId.Gemini, snapshot.Provider);
+                Assert.NotEmpty(snapshot.Windows);
+                Assert.Contains(snapshot.Windows, w => w.Label.Contains("Gemini"));
             }
             finally
             {
@@ -964,6 +1067,59 @@ public class ProviderTests
         var snapshot = await provider.FetchAsync(account, vault, client);
         Assert.NotNull(snapshot);
         Assert.Equal(3, handler.ReturnedContents.Count); // 1st usage (401), token refresh (200), 2nd usage (200)
+        Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+    }
+
+    [Fact]
+    public async Task GeminiProvider_FetchAsync_DisposesResponses_DuringReactive401OAuthRefresh()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-gemini-refresh", Provider = ProviderId.Gemini };
+        vault.SaveTokens(account.Id, new StoredTokens
+        {
+            AccessToken = "expired-token",
+            RefreshToken = "valid-refresh-token",
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+        });
+
+        int usageAttempts = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.ToString().Contains("oauth2.googleapis.com/token"))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new TrackingContent("""{"access_token":"new-google-access-token","expires_in":3600}""")
+                };
+            }
+            if (req.RequestUri!.ToString().Contains("loadCodeAssist"))
+            {
+                usageAttempts++;
+                if (usageAttempts == 1)
+                {
+                    return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+                    {
+                        Content = new TrackingContent("Unauthorized")
+                    };
+                }
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new TrackingContent("""{"paidTier":{"id":"g1-pro-tier","name":"Google AI Pro"}}""")
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"5h","remainingFraction":0.9}]}]}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+        var provider = new GeminiProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Equal("Google AI Pro", snapshot.Identity.Plan);
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Gemini (5h)", snapshot.Windows[0].Label);
         Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
     }
 }

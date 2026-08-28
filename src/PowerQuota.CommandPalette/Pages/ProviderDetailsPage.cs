@@ -191,7 +191,7 @@ public class ProviderDetailsPage : ListPage
             ProviderId.Claude => $"Claude Code CLI: Run 'claude' in terminal to login ({error ?? "Login required"})",
             ProviderId.Codex => $"ChatGPT / Codex CLI: Run 'codex login' in terminal ({error ?? "Login required"})",
             ProviderId.Cursor => $"Cursor IDE: Sign into Cursor to refresh session ({error ?? "Session expired"})",
-            ProviderId.Gemini => $"Gemini: Run 'gemini' in terminal ({error ?? "Login required"})",
+            ProviderId.Gemini => $"Antigravity: Sign into Antigravity desktop app or CLI ({error ?? "Login required"})",
             ProviderId.Copilot => $"GitHub Copilot: Sign in via VS Code or Copilot CLI ({error ?? "Login required"})",
             ProviderId.Minimax => $"Minimax: Set API key ({error ?? "Key required"})",
             ProviderId.Kimi => $"Kimi: Configure API key or OpenCode auth ({error ?? "Key required"})",
