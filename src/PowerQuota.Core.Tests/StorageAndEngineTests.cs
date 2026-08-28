@@ -1,3 +1,4 @@
+using System.Net.Http;
 using Xunit;
 using PowerQuota.Core.Engine;
 using PowerQuota.Core.Models;
@@ -145,5 +146,47 @@ public class StorageAndEngineTests
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Minimax);
         Assert.Contains(service.State.Providers, p => p.Provider == ProviderId.Kimi);
     }
+
+    [Fact]
+    public async Task QuotaRefreshService_DoesNotDispose_CallerProvidedHttpClient()
+    {
+        var configStorage = new ConfigStorage();
+        var vault = new WindowsCredentialVault();
+        var handler = new DisposableTrackingHandler();
+        var httpClient = new HttpClient(handler);
+
+        var service = new QuotaRefreshService(configStorage, vault, httpClient, autoStartTimer: false);
+        service.Dispose();
+
+        // The handler and HttpClient should not have been disposed by QuotaRefreshService
+        Assert.False(handler.IsDisposed);
+
+        // Caller should still be able to issue requests through the client
+        var response = await httpClient.GetAsync("https://example.com");
+        Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
+
+        httpClient.Dispose();
+        Assert.True(handler.IsDisposed);
+    }
+
+    private class DisposableTrackingHandler : HttpMessageHandler
+    {
+        public bool IsDisposed { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                IsDisposed = true;
+            }
+            base.Dispose(disposing);
+        }
+    }
 }
+
 

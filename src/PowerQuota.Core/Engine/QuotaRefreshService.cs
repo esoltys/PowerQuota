@@ -10,6 +10,7 @@ public class QuotaRefreshService : IDisposable
     private readonly ConfigStorage _configStorage;
     private readonly WindowsCredentialVault _vault;
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly Dictionary<ProviderId, IProviderAdapter> _adapters = new();
     private readonly Timer? _timer;
     private readonly object _stateLock = new();
@@ -29,6 +30,7 @@ public class QuotaRefreshService : IDisposable
     {
         _configStorage = configStorage;
         _vault = vault;
+        _ownsHttpClient = httpClient == null;
         _httpClient = httpClient ?? new HttpClient();
 
         // Register all provider adapters
@@ -240,7 +242,10 @@ public class QuotaRefreshService : IDisposable
     public void Dispose()
     {
         _timer?.Dispose();
-        _httpClient.Dispose();
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
     }
 }
 
