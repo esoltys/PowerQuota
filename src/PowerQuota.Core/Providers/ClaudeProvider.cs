@@ -27,12 +27,12 @@ public class ClaudeProvider : IProviderAdapter
             }
         }
 
-        var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
+        using var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
 
-        var response = await client.SendAsync(request, ct);
+        using var response = await client.SendAsync(request, ct);
         if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
         {
             throw new UnauthorizedAccessException("Claude session expired");
