@@ -38,10 +38,20 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path ./publish/* -DestinationPath PowerQuota-win-x64.zip -Force
 
+      - name: Build MSIX Store Bundle
+        shell: pwsh
+        env:
+          PackageIdentityName: 39231EricJamesSoltys
+          PackageIdentityPublisher: D497347D-E082-41C5-8B70-20EA278E5213
+          PublisherDisplayName: Eric James Soltys
+        run: .\build-msix.ps1 -ForStore -Bundle
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: PowerQuota-win-x64.zip
+          files: |
+            PowerQuota-win-x64.zip
+            artifacts/*.msixbundle
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
