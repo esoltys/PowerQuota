@@ -10,7 +10,7 @@
   <Identity
     Name="PowerQuota.CommandPalette"
     Publisher="CN=PowerQuota"
-    Version="1.4.0.0"
+    Version="1.5.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
