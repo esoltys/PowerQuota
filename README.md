@@ -12,7 +12,7 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
 
 [<img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>](https://apps.microsoft.com/detail/9NP7BBL8695W)
 
-- **Microsoft Store**: Get PowerQuota on the **[Microsoft Store](https://apps.microsoft.com/detail/9NP7BBL8695W)** (recommended — installs and updates automatically).
+**Microsoft Store**: Get PowerQuota on the **[Microsoft Store](https://apps.microsoft.com/detail/9NP7BBL8695W)** (recommended — installs and updates automatically).
 
 > **Requires [PowerToys](https://learn.microsoft.com/en-us/windows/powertoys/)** — PowerQuota is a Command Palette extension and needs PowerToys installed to run.
 
