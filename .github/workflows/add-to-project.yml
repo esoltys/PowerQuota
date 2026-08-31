@@ -14,6 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Add to PowerQuota Project
+        # Adding items to a user Projects (v2) board requires a PAT with project scope
+        # (secrets.PROJECTS_TOKEN); GITHUB_TOKEN can never authorize this regardless of
+        # the permissions block above. Don't fail CI on every PR/issue until that secret
+        # is configured in repo settings.
+        continue-on-error: true
         uses: actions/add-to-project@v1.0.2
         with:
           project-url: https://github.com/users/esoltys/projects/4
