@@ -438,8 +438,6 @@ public class QuotaRefreshService : IDisposable
             }
             State.UpdatedAt = DateTimeOffset.UtcNow;
         }
-
-        NotifyStateChanged();
     }
 
     private AccountConfig? TryAutoDiscoverAccount(ProviderId provider)
