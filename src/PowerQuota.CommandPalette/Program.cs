@@ -25,6 +25,7 @@ public static class Program
                     System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] Creating PowerQuotaExtension instance\n");
                     return new PowerQuotaExtension();
                 });
+                PowerQuotaExtension.StartUpdateWatcher();
                 System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] Extension registered. Waiting for host requests...\n");
                 PowerQuotaExtension.DisposedEvent.WaitOne();
                 System.IO.File.AppendAllText(logPath, $"[{System.DateTime.UtcNow:O}] DisposedEvent signaled, exiting cleanly\n");
