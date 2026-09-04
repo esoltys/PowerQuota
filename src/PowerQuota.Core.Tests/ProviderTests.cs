@@ -195,6 +195,56 @@ public class ProviderTests
     }
 
     [Fact]
+    public void ClaudeProvider_KeepsAggregateSessionWindowWhenScopedSessionEntryPrecedesIt()
+    {
+        // A per-model 5-hour entry arrives before the "all models" aggregate one.
+        // Previously the code labeled every "session" group item "Session" and kept
+        // only the first match, so the aggregate (32%) would be silently dropped in
+        // favor of the barely-used per-model entry (1%) — exactly the mismatch users
+        // reported between PowerQuota and the official app.
+        var json = """
+        [
+            {
+                "kind": "five_hour",
+                "group": "session",
+                "percent": 1.0,
+                "resets_at": "2026-09-03T23:15:00Z",
+                "scope": {
+                    "model": {
+                        "id": "claude-opus-5",
+                        "display_name": "Claude Opus 5"
+                    }
+                }
+            },
+            {
+                "kind": "five_hour",
+                "group": "session",
+                "percent": 32.0,
+                "resets_at": "2026-09-03T23:15:00Z",
+                "scope": null
+            },
+            {
+                "kind": "weekly_all",
+                "group": "weekly",
+                "percent": 44.0,
+                "resets_at": "2026-09-04T14:23:00Z",
+                "scope": null
+            }
+        ]
+        """;
+
+        var snapshot = ClaudeProvider.ParseUsage(json);
+
+        Assert.Equal(3, snapshot.Windows.Count);
+        Assert.Equal("Session", snapshot.Windows[0].Label);
+        Assert.Equal(32.0f, snapshot.Windows[0].UsedPercent);
+        Assert.Equal("Weekly", snapshot.Windows[1].Label);
+        Assert.Equal(44.0f, snapshot.Windows[1].UsedPercent);
+        Assert.Equal("Claude Opus 5 (Session)", snapshot.Windows[2].Label);
+        Assert.Equal(1.0f, snapshot.Windows[2].UsedPercent);
+    }
+
+    [Fact]
     public void UsageWindow_FormatResetTime_FormatsDaysAndHoursAccurately()
     {
         // 1. Multi-day reset (4 days away -> e.g. "Resets Friday at 2:00 PM")

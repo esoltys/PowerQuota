@@ -120,6 +120,11 @@ public class ClaudeProvider : IProviderAdapter
             }
         }
 
+        // The API doesn't guarantee the "all models" aggregate entry comes first —
+        // a per-model entry can precede it. HeadlineIndex assumes index 0 is the
+        // aggregate, so make sure it actually is when one is present.
+        PromoteAggregateWindowsToFront(windows);
+
         // Extra usage / spend limits if present
         ExtraUsageState? extraUsage = null;
         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("extra_usage", out var eu) && eu.ValueKind == JsonValueKind.Object)
@@ -153,6 +158,20 @@ public class ClaudeProvider : IProviderAdapter
         };
     }
 
+    private static void PromoteAggregateWindowsToFront(List<UsageWindow> windows)
+    {
+        windows.Sort((a, b) =>
+        {
+            int Rank(UsageWindow w) => w.Label switch
+            {
+                "Session" => 0,
+                "Weekly" => 1,
+                _ => 2
+            };
+            return Rank(a).CompareTo(Rank(b));
+        });
+    }
+
     private static void ParseLimitsArray(JsonElement array, List<UsageWindow> windows)
     {
         var seen = new HashSet<string>();
@@ -162,7 +181,7 @@ public class ClaudeProvider : IProviderAdapter
 
             string? group = item.TryGetProperty("group", out var g) && g.ValueKind == JsonValueKind.String ? g.GetString() : null;
             string? kind = item.TryGetProperty("kind", out var k) && k.ValueKind == JsonValueKind.String ? k.GetString() : null;
-            
+
             float percent = 0f;
             if (item.TryGetProperty("percent", out var p) && p.ValueKind == JsonValueKind.Number)
             {
@@ -176,13 +195,31 @@ public class ClaudeProvider : IProviderAdapter
                 resetAt = parsedDt;
             }
 
+            string? modelName = null;
+            if (item.TryGetProperty("scope", out var scope) && scope.ValueKind == JsonValueKind.Object)
+            {
+                if (scope.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.Object)
+                {
+                    if (model.TryGetProperty("display_name", out var dn) && dn.ValueKind == JsonValueKind.String && dn.GetString() is { } name && !string.IsNullOrEmpty(name))
+                    {
+                        modelName = name;
+                    }
+                }
+            }
+
             if (group == "session" || kind == "five_hour" || kind == "session")
             {
-                if (seen.Add("Session"))
+                // An unscoped entry is the "all models" aggregate limit shown by the
+                // official app. Scoped (per-model) entries are additional, separate
+                // limits — label them distinctly so they don't clobber the aggregate
+                // or collide with a same-named weekly entry.
+                string label = modelName is null ? "Session" : $"{modelName} (Session)";
+
+                if (seen.Add(label))
                 {
                     windows.Add(new UsageWindow
                     {
-                        Label = "Session",
+                        Label = label,
                         UsedPercent = percent,
                         ResetAt = resetAt,
                         WindowSeconds = 5 * 3600,
@@ -192,17 +229,7 @@ public class ClaudeProvider : IProviderAdapter
             }
             else if (group == "weekly" || kind?.StartsWith("seven_day") == true || kind?.StartsWith("weekly") == true)
             {
-                string label = "Weekly";
-                if (item.TryGetProperty("scope", out var scope) && scope.ValueKind == JsonValueKind.Object)
-                {
-                    if (scope.TryGetProperty("model", out var model) && model.ValueKind == JsonValueKind.Object)
-                    {
-                        if (model.TryGetProperty("display_name", out var dn) && dn.ValueKind == JsonValueKind.String && dn.GetString() is { } name && !string.IsNullOrEmpty(name))
-                        {
-                            label = name;
-                        }
-                    }
-                }
+                string label = modelName ?? "Weekly";
 
                 if (seen.Add(label))
                 {
