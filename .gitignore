@@ -33,6 +33,7 @@ bundle_mapping.txt
 *.pfx
 *.cer
 
-# Local AI tooling
-.claude/
+# Local AI tooling (skills are tracked so they travel with the repo)
+.claude/*
+!.claude/skills/
 

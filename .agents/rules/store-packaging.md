@@ -8,9 +8,9 @@ These variables are defined in the Windows **User** environment registry (`[Syst
 
 | Variable | Scope | Example Value | Description |
 |---|---|---|---|
-| `PublisherDisplayName` | User | `Eric James Soltys` | Friendly publisher display name validated by Partner Center during package acceptance. |
-| `PackageIdentityPublisher` | User | `D497347D-E082-41C5-8B70-20EA278E5213` | Publisher GUID used in `Package.Identity.Publisher` as `CN=<GUID>`. |
-| `PackageIdentityName` | User | `39231EricJamesSoltys` | Package prefix used in `Package.Identity.Name` as `<Prefix>.PowerQuota`. |
+| `PublisherDisplayName` | User | `Your Name` | Friendly publisher display name validated by Partner Center during package acceptance. |
+| `PackageIdentityPublisher` | User | `00000000-0000-0000-0000-000000000000` | Publisher GUID used in `Package.Identity.Publisher` as `CN=<GUID>`. |
+| `PackageIdentityName` | User | `12345YourPublisherId` | Package prefix used in `Package.Identity.Name` as `<Prefix>.PowerQuota`. |
 
 > [!NOTE]
 > Do not hardcode custom developer credentials into `Package.appxmanifest` directly; the build script dynamically patches `AppxManifest.xml` in the staging directory during the `-ForStore` packaging process.
@@ -26,7 +26,7 @@ When automating submissions or querying certification status through Partner Cen
 | `STORE_TENANT_ID` | Azure AD Directory (Tenant) ID linked to Partner Center. |
 | `STORE_CLIENT_ID` | Azure AD App Registration Client ID. |
 | `STORE_CLIENT_SECRET` | Azure AD Client Secret for Store API authentication. |
-| `STORE_APP_ID` | Partner Center Store Product/App ID (e.g. `9PNQ2NFSQ7XW`). |
+| `STORE_APP_ID` | Partner Center Store Product/App ID (found on the app's Partner Center identity page). |
 
 ---
 
