@@ -902,7 +902,9 @@ public class ProviderTests
     {
         var vault = new WindowsCredentialVault();
         var account = new AccountConfig { Id = "test-claude", Provider = ProviderId.Claude };
-        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "test-token" });
+        var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
+        var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "test-token";
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = initialToken });
 
         // 1. Success
         var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
@@ -926,6 +928,54 @@ public class ProviderTests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
         Assert.Single(unauthHandler.ReturnedContents);
         Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_RefreshesViaOAuth_WhenCachedTokenIs401()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-claude-refresh", Provider = ProviderId.Claude };
+        var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
+        var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "expired-token";
+
+        vault.SaveTokens(account.Id, new StoredTokens
+        {
+            AccessToken = initialToken,
+            RefreshToken = "valid-refresh-token",
+            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1) // not expired proactively
+        });
+
+        int usageAttempts = 0;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            if (req.RequestUri!.ToString().Contains("oauth/token"))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new TrackingContent("""{"access_token":"new-claude-access-token","refresh_token":"new-refresh-token","expires_in":3600}""")
+                };
+            }
+            usageAttempts++;
+            if (usageAttempts == 1)
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+                {
+                    Content = new TrackingContent("Unauthorized")
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"five_hour":{"utilization":15.0}}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+        var provider = new ClaudeProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Equal(3, handler.ReturnedContents.Count); // 1st usage (401), token refresh (200), 2nd usage (200)
+        Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+        Assert.Equal("new-claude-access-token", vault.GetTokens(account.Id)?.AccessToken);
     }
 
     [Fact]

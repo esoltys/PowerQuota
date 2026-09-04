@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text.Json;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
@@ -8,39 +9,148 @@ namespace PowerQuota.Core.Providers;
 public class ClaudeProvider : IProviderAdapter
 {
     private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";
+    private const string TokenEndpoint = "https://console.anthropic.com/v1/oauth/token";
+    private const string ClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
     public ProviderId Id => ProviderId.Claude;
 
     public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
     {
         var tokens = vault.GetTokens(account.Id) ?? new StoredTokens();
+        var (scannedAt, scannedRt, scannedExp) = HostCliScanner.ScanClaudeTokens();
+
         if (string.IsNullOrEmpty(tokens.AccessToken))
         {
-            var hostToken = HostCliScanner.GetClaudeActiveToken();
-            if (!string.IsNullOrEmpty(hostToken))
+            if (!string.IsNullOrEmpty(scannedAt))
             {
-                tokens.AccessToken = hostToken;
+                tokens.AccessToken = scannedAt;
+                tokens.RefreshToken = scannedRt;
+                tokens.ExpiresAt = scannedExp;
+                vault.SaveTokens(account.Id, tokens);
             }
             else
             {
                 throw new InvalidOperationException("Claude login required");
             }
         }
+        else if (!string.IsNullOrEmpty(scannedAt) && scannedAt != tokens.AccessToken)
+        {
+            // The CLI (or a prior refresh) rotated the on-disk token since we last cached it —
+            // always prefer the freshest one rather than the possibly-stale cached copy.
+            tokens.AccessToken = scannedAt;
+            tokens.RefreshToken = scannedRt ?? tokens.RefreshToken;
+            tokens.ExpiresAt = scannedExp ?? tokens.ExpiresAt;
+            vault.SaveTokens(account.Id, tokens);
+        }
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+        // Proactive refresh if the token is expired or about to expire in < 2 minutes
+        if (tokens.ExpiresAt.HasValue && tokens.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(2) && !string.IsNullOrEmpty(tokens.RefreshToken))
+        {
+            var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
+            if (refreshed != null)
+            {
+                tokens = refreshed;
+            }
+        }
 
-        using var response = await client.SendAsync(request, ct);
-        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+        async Task<(System.Net.HttpStatusCode StatusCode, string? Json)> SendUsageRequestAsync(string accessToken)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, UsageEndpoint);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            request.Headers.TryAddWithoutValidation("anthropic-version", "2023-06-01");
+
+            using var response = await client.SendAsync(request, ct);
+            if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+            {
+                return (response.StatusCode, null);
+            }
+            response.EnsureSuccessStatusCode();
+            var json = await response.Content.ReadAsStringAsync(ct);
+            return (response.StatusCode, json);
+        }
+
+        var (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+
+        // Reactive refresh on 401 Unauthorized
+        if (statusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            // First check if the host CLI already refreshed the token on disk
+            var (freshAt, freshRt, freshExp) = HostCliScanner.ScanClaudeTokens();
+            if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
+            {
+                tokens.AccessToken = freshAt;
+                tokens.RefreshToken = freshRt ?? tokens.RefreshToken;
+                tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
+                vault.SaveTokens(account.Id, tokens);
+                (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+            }
+
+            // If still unauthorized, try refreshing via the OAuth refresh token ourselves
+            if (statusCode == System.Net.HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(tokens.RefreshToken))
+            {
+                var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
+                if (refreshed != null)
+                {
+                    tokens = refreshed;
+                    (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+                }
+            }
+        }
+
+        if (statusCode == System.Net.HttpStatusCode.Unauthorized || statusCode == System.Net.HttpStatusCode.Forbidden || usageJson == null)
         {
             throw new UnauthorizedAccessException("Claude session expired");
         }
 
-        response.EnsureSuccessStatusCode();
-        var json = await response.Content.ReadAsStringAsync(ct);
-        return ParseUsage(json, account);
+        return ParseUsage(usageJson, account);
+    }
+
+    private async Task<StoredTokens?> RefreshTokenAsync(string accountId, StoredTokens tokens, WindowsCredentialVault vault, HttpClient client, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(tokens.RefreshToken)) return null;
+
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
+            {
+                Content = JsonContent.Create(new
+                {
+                    grant_type = "refresh_token",
+                    refresh_token = tokens.RefreshToken,
+                    client_id = ClientId
+                })
+            };
+
+            using var response = await client.SendAsync(request, ct);
+            if (!response.IsSuccessStatusCode) return null;
+
+            var json = await response.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("access_token", out var atProp) && atProp.GetString() is { } newAt && !string.IsNullOrEmpty(newAt))
+            {
+                tokens.AccessToken = newAt;
+                if (root.TryGetProperty("refresh_token", out var rtProp) && rtProp.GetString() is { } newRt && !string.IsNullOrEmpty(newRt))
+                {
+                    tokens.RefreshToken = newRt;
+                }
+                if (root.TryGetProperty("expires_in", out var expIn) && expIn.ValueKind == JsonValueKind.Number && expIn.TryGetInt64(out var expInSec) && expInSec > 0)
+                {
+                    tokens.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expInSec);
+                }
+
+                vault.SaveTokens(accountId, tokens);
+                return tokens;
+            }
+        }
+        catch
+        {
+            // Allow caller to fall back to the failure already observed
+        }
+
+        return null;
     }
 
     public Task<string?> GetSystemActiveAccountIdAsync(IReadOnlyList<AccountConfig> accounts, WindowsCredentialVault vault)
