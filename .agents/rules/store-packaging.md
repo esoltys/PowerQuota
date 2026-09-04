@@ -48,3 +48,32 @@ When automating submissions or querying certification status through Partner Cen
 3. **Tagging & GitHub Release**:
    - Tag format: `v*` (e.g., `v1.1.0` or `v.1.1`).
    - Pushing the tag automatically triggers `.github/workflows/build-and-release.yml`.
+
+---
+
+## Store Install Stuck on "Retry"
+
+A genuine version bump (e.g. 1.6.0 → 1.7.0) is handled automatically: the extension
+watches for it via `PackageCatalog.PackageUpdating` in
+[`PowerQuotaExtension.StartUpdateWatcher()`](file:///c:/Users/ericj/source/PowerQuota/src/PowerQuota.CommandPalette/PowerQuotaExtension.cs)
+and exits itself once Windows finishes the swap, so PowerToys can relaunch it against the
+new files — no manual steps needed.
+
+`PackageUpdating` only fires for an actual version transition, though. If the Store shows
+"Retry" (install/re-register failing) for what should be a fresh install of the **same**
+version — e.g. a previously stalled or interrupted install being retried — Windows can't
+hot-swap a running binary against itself and there's no event to hook. Check
+`Microsoft-Windows-AppXDeploymentServer/Operational` for `error 0x80073D02: Unable to
+install because the following apps need to be closed <PackageFullName>` to confirm this is
+what's happening:
+
+```powershell
+Get-WinEvent -LogName "Microsoft-Windows-AppXDeploymentServer/Operational" -MaxEvents 5
+```
+
+Fix: close the locked processes, then hit Retry in the Store.
+
+```powershell
+Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
+Stop-Process -Name "Microsoft.CmdPal.UI" -Force -ErrorAction SilentlyContinue
+```
