@@ -176,7 +176,16 @@ public static class HostCliScanner
 
     public static string? GetCodexActiveToken() => ScanCodexTokens().AccessToken;
 
-    public static string? GetClaudeActiveToken()
+    public static string? GetClaudeActiveToken() => ScanClaudeTokens().AccessToken;
+
+    /// <summary>
+    /// Scans host-installed Claude Code CLI credential stores for the current access/refresh
+    /// token pair. The CLI itself refreshes ~/.claude/.credentials.json in place when its access
+    /// token expires (as long as it's actually run), so this always re-reads from disk rather
+    /// than relying on anything PowerQuota cached earlier — otherwise PowerQuota keeps using a
+    /// token the CLI has already rotated away from.
+    /// </summary>
+    public static (string? AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt) ScanClaudeTokens()
     {
         // 1. Check ~/.claude/.credentials.json (Claude Code CLI standard storage)
         var credJsonPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", ".credentials.json");
@@ -188,9 +197,25 @@ public static class HostCliScanner
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth))
                 {
-                    if (oauth.TryGetProperty("accessToken", out var at) && at.GetString() is { } atStr && !string.IsNullOrEmpty(atStr))
+                    string? at = oauth.TryGetProperty("accessToken", out var atProp) ? atProp.GetString() : null;
+                    string? rt = oauth.TryGetProperty("refreshToken", out var rtProp) ? rtProp.GetString() : null;
+                    DateTimeOffset? exp = null;
+
+                    if (oauth.TryGetProperty("expiresAt", out var expProp))
                     {
-                        return atStr;
+                        if (expProp.ValueKind == JsonValueKind.Number && expProp.TryGetInt64(out var expEpochMs) && expEpochMs > 0)
+                        {
+                            exp = DateTimeOffset.FromUnixTimeMilliseconds(expEpochMs);
+                        }
+                        else if (expProp.ValueKind == JsonValueKind.String && DateTimeOffset.TryParse(expProp.GetString(), out var parsedExp))
+                        {
+                            exp = parsedExp;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(at))
+                    {
+                        return (at, rt, exp);
                     }
                 }
             }
@@ -209,7 +234,7 @@ public static class HostCliScanner
         foreach (var target in credTargets)
         {
             var token = ReadCredentialManagerSecret(target);
-            if (!string.IsNullOrEmpty(token)) return token;
+            if (!string.IsNullOrEmpty(token)) return (token, null, null);
         }
 
         // 3. Check local configuration files
@@ -224,15 +249,15 @@ public static class HostCliScanner
                 var json = File.ReadAllText(path);
                 using var doc = JsonDocument.Parse(json);
                 if (doc.RootElement.TryGetProperty("access_token", out var at) && at.GetString() is { } atStr)
-                    return atStr;
+                    return (atStr, null, null);
                 if (doc.RootElement.TryGetProperty("oauth_token", out var ot) && ot.GetString() is { } otStr)
-                    return otStr;
+                    return (otStr, null, null);
                 if (doc.RootElement.TryGetProperty("token", out var t) && t.GetString() is { } tStr)
-                    return tStr;
+                    return (tStr, null, null);
             }
             catch { }
         }
-        return null;
+        return (null, null, null);
     }
 
     public static (string? AccessToken, string? RefreshToken) ScanCursorIdeTokens()
