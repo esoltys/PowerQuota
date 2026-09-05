@@ -211,6 +211,39 @@ Whenever you make code or UI changes, simply run:
 
 ---
 
+## Developer & Maintenance Scripts
+
+PowerQuota provides several PowerShell helper scripts in the repository root to automate building, registering, reloading, packaging, and cleaning up development builds:
+
+| Script | Purpose | Typical Usage |
+|---|---|---|
+| [`register.ps1`](register.ps1) | Publishes, registers the local developer AppX package, cleans stale bands, and hot-reloads Command Palette. | `.\register.ps1` |
+| [`reload.ps1`](reload.ps1) | Rapid inner-loop build and hot-reload for code/UI iterations without re-registering. | `.\reload.ps1` |
+| [`build-msix.ps1`](build-msix.ps1) | Automated MSIX packager; builds signed local testing packages or unsigned packages for Microsoft Store submission. | `.\build-msix.ps1 -Install`<br>`.\build-msix.ps1 -ForStore -Version 1.7.0.0` |
+| [`uninstall-powerquota.ps1`](uninstall-powerquota.ps1) | Safely removes sideloaded developer AppX packages and cleans stale Command Palette provider caches and orphaned dock bands (preserving Store installs). | `.\uninstall-powerquota.ps1 -ClearCache -ReloadCmdPal` |
+
+### Managing Sideloaded Builds vs. Microsoft Store Releases
+
+If you develop or test PowerQuota locally (via `register.ps1` or `build-msix.ps1 -Install`), Windows registers the developer package identity (`PowerQuota.CommandPalette`). When also installing the official Microsoft Store version (`39231EricJamesSoltys.PowerQuota`), stale developer package records and duplicate cached provider entries can linger in Command Palette's settings.
+
+Use `uninstall-powerquota.ps1` to cleanly remove local development builds without touching your Store version:
+
+```powershell
+# 1. Preview changes safely without modifying anything (dry-run):
+.\uninstall-powerquota.ps1 -WhatIf -ClearCache
+
+# 2. Remove sideloaded packages, clean stale Command Palette provider caches & dock bands, and reload:
+.\uninstall-powerquota.ps1 -ClearCache -ReloadCmdPal
+
+# 3. (Optional) Complete removal of ALL PowerQuota instances, including Microsoft Store:
+.\uninstall-powerquota.ps1 -IncludeStore -ClearCache -ReloadCmdPal
+```
+
+> [!NOTE]
+> By default, `uninstall-powerquota.ps1` preserves official Microsoft Store packages and only removes sideloaded/developer builds and their orphaned cache entries.
+
+---
+
 ## Acknowledgments
 
 This project is a native Windows & PowerToys port inspired by and based on the work of [TopiCsarno/yapcap](https://github.com/TopiCsarno/yapcap) created for the COSMIC desktop environment. I love using YapCap on my CachyOS + COSMIC laptop and wanted something similar for my Windows 11 desktop. Thanks!
