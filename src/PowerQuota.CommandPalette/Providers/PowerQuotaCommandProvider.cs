@@ -119,6 +119,7 @@ public class PowerQuotaCommandProvider : CommandProvider
         var refreshAllIcon = new IconInfo("\uE72C");
         commands.Add(new CommandItem(new AnonymousCommand(() =>
         {
+            _refreshService.ResetBackoff();
             _ = _refreshService.RefreshAllAsync();
         })
         {

@@ -7,18 +7,20 @@ namespace PowerQuota.Core.Providers;
 
 public class GeminiProvider : IProviderAdapter
 {
-    private const string LoadCodeAssistUrl = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-    private const string RetrieveQuotaSummaryUrl = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+    private const string PrimaryLoadCodeAssistUrl = "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    private const string PrimaryRetrieveQuotaSummaryUrl = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+    private const string FallbackLoadCodeAssistUrl = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
+    private const string FallbackRetrieveQuotaSummaryUrl = "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 
     public ProviderId Id => ProviderId.Gemini;
 
     public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
     {
         var tokens = vault.GetTokens(account.Id) ?? new StoredTokens();
+        var (scannedAt, scannedRt, scannedExp, scannedEmail) = HostCliScanner.ScanGeminiAntigravityCredentials();
 
         if (string.IsNullOrEmpty(tokens.AccessToken) && string.IsNullOrEmpty(tokens.RefreshToken))
         {
-            var (scannedAt, scannedRt, scannedExp, scannedEmail) = HostCliScanner.ScanGeminiAntigravityCredentials();
             if (!string.IsNullOrEmpty(scannedAt) || !string.IsNullOrEmpty(scannedRt))
             {
                 tokens.AccessToken = scannedAt ?? string.Empty;
@@ -30,6 +32,15 @@ public class GeminiProvider : IProviderAdapter
             {
                 throw new InvalidOperationException("Gemini login required");
             }
+        }
+        else if (!string.IsNullOrEmpty(scannedAt) && scannedAt != tokens.AccessToken)
+        {
+            // Antigravity (or a prior refresh) rotated the on-disk credentials since we last cached it —
+            // always prefer the freshest credentials.
+            tokens.AccessToken = scannedAt;
+            tokens.RefreshToken = scannedRt ?? tokens.RefreshToken;
+            tokens.ExpiresAt = scannedExp ?? tokens.ExpiresAt;
+            vault.SaveTokens(account.Id, tokens);
         }
 
         // Auto-refresh access token if close to expiry
@@ -51,16 +62,40 @@ public class GeminiProvider : IProviderAdapter
 
         string? planName = null;
 
-        async Task<string> SendAuthorizedPostAsync(string url)
+        static HttpRequestMessage CreateRequest(string url, string accessToken)
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
+            var req = new HttpRequestMessage(HttpMethod.Post, url);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
             req.Headers.Add("User-Agent", "antigravity/2.11.0");
             req.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            return req;
+        }
 
+        async Task<string> SendAuthorizedPostSingleUrlAsync(string url)
+        {
+            using var req = CreateRequest(url, tokens.AccessToken);
             using var resp = await client.SendAsync(req, ct).ConfigureAwait(false);
+
             if (resp.StatusCode == System.Net.HttpStatusCode.Unauthorized || resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
             {
+                // 1. First check if Antigravity already refreshed the token in Credential Manager / on disk
+                var (freshAt, freshRt, freshExp, _) = HostCliScanner.ScanGeminiAntigravityCredentials();
+                if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
+                {
+                    tokens.AccessToken = freshAt;
+                    tokens.RefreshToken = freshRt ?? tokens.RefreshToken;
+                    tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
+                    vault.SaveTokens(account.Id, tokens);
+
+                    using var retryReq = CreateRequest(url, tokens.AccessToken);
+                    using var retryResp = await client.SendAsync(retryReq, ct).ConfigureAwait(false);
+                    if (retryResp.IsSuccessStatusCode)
+                    {
+                        return await retryResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                    }
+                }
+
+                // 2. If still unauthorized, try refreshing via the OAuth refresh token
                 if (!string.IsNullOrEmpty(tokens.RefreshToken))
                 {
                     var (refreshedAt, refreshedExp) = await HostCliScanner.RefreshGeminiTokenAsync(tokens.RefreshToken, client, ct).ConfigureAwait(false);
@@ -70,11 +105,7 @@ public class GeminiProvider : IProviderAdapter
                         tokens.ExpiresAt = refreshedExp;
                         vault.SaveTokens(account.Id, tokens);
 
-                        using var retryReq = new HttpRequestMessage(HttpMethod.Post, url);
-                        retryReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tokens.AccessToken);
-                        retryReq.Headers.Add("User-Agent", "antigravity/2.11.0");
-                        retryReq.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-
+                        using var retryReq = CreateRequest(url, tokens.AccessToken);
                         using var retryResp = await client.SendAsync(retryReq, ct).ConfigureAwait(false);
                         if (retryResp.IsSuccessStatusCode)
                         {
@@ -90,10 +121,28 @@ public class GeminiProvider : IProviderAdapter
             return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         }
 
+        async Task<string> SendAuthorizedPostWithFallbackAsync(string primaryUrl, string fallbackUrl)
+        {
+            try
+            {
+                return await SendAuthorizedPostSingleUrlAsync(primaryUrl).ConfigureAwait(false);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+            {
+                if (ct.IsCancellationRequested) throw;
+                // If primary daily endpoint fails or is unreachable, attempt public endpoint fallback
+                return await SendAuthorizedPostSingleUrlAsync(fallbackUrl).ConfigureAwait(false);
+            }
+        }
+
         // Step 1: Load code assist for plan info
         try
         {
-            var loadJson = await SendAuthorizedPostAsync(LoadCodeAssistUrl).ConfigureAwait(false);
+            var loadJson = await SendAuthorizedPostWithFallbackAsync(PrimaryLoadCodeAssistUrl, FallbackLoadCodeAssistUrl).ConfigureAwait(false);
             using var loadDoc = JsonDocument.Parse(loadJson);
             if (loadDoc.RootElement.TryGetProperty("paidTier", out var pt) && pt.TryGetProperty("name", out var ptName))
             {
@@ -114,7 +163,7 @@ public class GeminiProvider : IProviderAdapter
         }
 
         // Step 2: Retrieve quota summary
-        var quotaJson = await SendAuthorizedPostAsync(RetrieveQuotaSummaryUrl).ConfigureAwait(false);
+        var quotaJson = await SendAuthorizedPostWithFallbackAsync(PrimaryRetrieveQuotaSummaryUrl, FallbackRetrieveQuotaSummaryUrl).ConfigureAwait(false);
 
         return ParseUsage(quotaJson, planName, account);
     }

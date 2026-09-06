@@ -247,8 +247,22 @@ public class QuotaRefreshService : IDisposable
         }
     }
 
+    public void ResetBackoff(ProviderId? provider = null)
+    {
+        lock (_stateLock)
+        {
+            foreach (var acc in State.ProviderAccounts.Where(a => provider == null || a.Provider == provider.Value))
+            {
+                acc.RetryAfter = null;
+                acc.ConsecutiveFailures = 0;
+            }
+        }
+    }
+
     public async Task RefreshProviderAsync(ProviderId provider, CancellationToken ct = default)
     {
+        ResetBackoff(provider);
+
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
         var token = linkedCts.Token;
 

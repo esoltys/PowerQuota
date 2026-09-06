@@ -90,6 +90,7 @@ public class OverviewListPage : ListPage
         // Section 2: Management & Actions
         items.Add(new ListItem(new AnonymousCommand(() =>
         {
+            _refreshService.ResetBackoff();
             _ = _refreshService.RefreshAllAsync();
         }))
         {
