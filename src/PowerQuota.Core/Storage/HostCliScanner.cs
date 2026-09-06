@@ -179,11 +179,11 @@ public static class HostCliScanner
     public static string? GetClaudeActiveToken() => ScanClaudeTokens().AccessToken;
 
     /// <summary>
-    /// Scans host-installed Claude Code CLI credential stores for the current access/refresh
-    /// token pair. The CLI itself refreshes ~/.claude/.credentials.json in place when its access
-    /// token expires (as long as it's actually run), so this always re-reads from disk rather
-    /// than relying on anything PowerQuota cached earlier — otherwise PowerQuota keeps using a
-    /// token the CLI has already rotated away from.
+    /// Scans host-installed Claude Code CLI credential stores for the current access token and expiration.
+    /// Anthropic enforces strict single-use Refresh Token Rotation (RTR). If PowerQuota were to consume or rotate
+    /// the CLI's refresh token, Anthropic would immediately revoke it and invalidate the user's active Claude Code CLI
+    /// session. Therefore, PowerQuota operates strictly read-only and passively reads rotated access tokens that
+    /// Claude Code CLI updates in ~/.claude/.credentials.json during normal usage.
     /// </summary>
     public static (string? AccessToken, string? RefreshToken, DateTimeOffset? ExpiresAt) ScanClaudeTokens()
     {
@@ -198,7 +198,6 @@ public static class HostCliScanner
                 if (doc.RootElement.TryGetProperty("claudeAiOauth", out var oauth))
                 {
                     string? at = oauth.TryGetProperty("accessToken", out var atProp) ? atProp.GetString() : null;
-                    string? rt = oauth.TryGetProperty("refreshToken", out var rtProp) ? rtProp.GetString() : null;
                     DateTimeOffset? exp = null;
 
                     if (oauth.TryGetProperty("expiresAt", out var expProp))
@@ -215,7 +214,7 @@ public static class HostCliScanner
 
                     if (!string.IsNullOrEmpty(at))
                     {
-                        return (at, rt, exp);
+                        return (at, null, exp);
                     }
                 }
             }

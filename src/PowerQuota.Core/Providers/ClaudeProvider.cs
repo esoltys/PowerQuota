@@ -17,14 +17,14 @@ public class ClaudeProvider : IProviderAdapter
     public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
     {
         var tokens = vault.GetTokens(account.Id) ?? new StoredTokens();
-        var (scannedAt, scannedRt, scannedExp) = HostCliScanner.ScanClaudeTokens();
+        var (scannedAt, _, scannedExp) = HostCliScanner.ScanClaudeTokens();
 
         if (string.IsNullOrEmpty(tokens.AccessToken))
         {
             if (!string.IsNullOrEmpty(scannedAt))
             {
                 tokens.AccessToken = scannedAt;
-                tokens.RefreshToken = scannedRt;
+                tokens.RefreshToken = null;
                 tokens.ExpiresAt = scannedExp;
                 vault.SaveTokens(account.Id, tokens);
             }
@@ -33,23 +33,59 @@ public class ClaudeProvider : IProviderAdapter
                 throw new InvalidOperationException("Claude login required");
             }
         }
-        else if (!string.IsNullOrEmpty(scannedAt) && scannedAt != tokens.AccessToken)
+        else if (!string.IsNullOrEmpty(scannedAt))
         {
-            // The CLI (or a prior refresh) rotated the on-disk token since we last cached it —
-            // always prefer the freshest one rather than the possibly-stale cached copy.
-            tokens.AccessToken = scannedAt;
-            tokens.RefreshToken = scannedRt ?? tokens.RefreshToken;
-            tokens.ExpiresAt = scannedExp ?? tokens.ExpiresAt;
-            vault.SaveTokens(account.Id, tokens);
+            // For accounts tracking host CLI credentials, always sync with on-disk state.
+            // If the account has no custom refresh token, or if its cached token matches the host CLI token,
+            // treat it as a host CLI account: update to newer on-disk tokens and purge any legacy refresh token
+            // from vault to avoid invalidating the CLI session.
+            bool isHostCliAccount = string.IsNullOrEmpty(tokens.RefreshToken) || tokens.AccessToken == scannedAt;
+            if (isHostCliAccount)
+            {
+                bool modified = false;
+                if (scannedAt != tokens.AccessToken)
+                {
+                    tokens.AccessToken = scannedAt;
+                    tokens.ExpiresAt = scannedExp ?? tokens.ExpiresAt;
+                    modified = true;
+                }
+
+                if (!string.IsNullOrEmpty(tokens.RefreshToken))
+                {
+                    tokens.RefreshToken = null;
+                    modified = true;
+                }
+
+                if (modified)
+                {
+                    vault.SaveTokens(account.Id, tokens);
+                }
+            }
         }
 
-        // Proactive refresh if the token is expired or about to expire in < 2 minutes
-        if (tokens.ExpiresAt.HasValue && tokens.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(2) && !string.IsNullOrEmpty(tokens.RefreshToken))
+        // Proactive token check: if the token is expired or about to expire in < 2 minutes
+        if (tokens.ExpiresAt.HasValue && tokens.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(2))
         {
-            var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
-            if (refreshed != null)
+            if (string.IsNullOrEmpty(tokens.RefreshToken))
             {
-                tokens = refreshed;
+                // Host CLI account: check if the CLI has rotated the token on disk
+                var (freshAt, _, freshExp) = HostCliScanner.ScanClaudeTokens();
+                if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
+                {
+                    tokens.AccessToken = freshAt;
+                    tokens.RefreshToken = null;
+                    tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
+                    vault.SaveTokens(account.Id, tokens);
+                }
+            }
+            else
+            {
+                // Manually configured account with a refresh token
+                var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
+                if (refreshed != null)
+                {
+                    tokens = refreshed;
+                }
             }
         }
 
@@ -75,20 +111,22 @@ public class ClaudeProvider : IProviderAdapter
         // Reactive refresh on 401 Unauthorized
         if (statusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            // First check if the host CLI already refreshed the token on disk
-            var (freshAt, freshRt, freshExp) = HostCliScanner.ScanClaudeTokens();
-            if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
+            if (string.IsNullOrEmpty(tokens.RefreshToken))
             {
-                tokens.AccessToken = freshAt;
-                tokens.RefreshToken = freshRt ?? tokens.RefreshToken;
-                tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
-                vault.SaveTokens(account.Id, tokens);
-                (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+                // Host CLI account: re-read disk to check if Claude Code CLI rotated credentials
+                var (freshAt, _, freshExp) = HostCliScanner.ScanClaudeTokens();
+                if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
+                {
+                    tokens.AccessToken = freshAt;
+                    tokens.RefreshToken = null;
+                    tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
+                    vault.SaveTokens(account.Id, tokens);
+                    (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+                }
             }
-
-            // If still unauthorized, try refreshing via the OAuth refresh token ourselves
-            if (statusCode == System.Net.HttpStatusCode.Unauthorized && !string.IsNullOrEmpty(tokens.RefreshToken))
+            else
             {
+                // Manually configured account: refresh via OAuth refresh token
                 var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
                 if (refreshed != null)
                 {
