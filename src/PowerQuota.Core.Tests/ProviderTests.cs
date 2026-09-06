@@ -1018,45 +1018,76 @@ public class ProviderTests
     [Fact]
     public async Task ClaudeProvider_FetchAsync_HostCliAccount_PurgesLegacyRefreshToken_FromVault()
     {
-        var vault = new WindowsCredentialVault();
-        var account = new AccountConfig { Id = "test-claude-legacy-vault", Provider = ProviderId.Claude };
-        var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-        var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "host-token";
+        var credDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+        var credFile = Path.Combine(credDir, ".credentials.json");
+        bool createdCredFile = false;
+        string? originalContent = null;
 
-        // Pre-populate vault with a legacy refresh token (simulating pre-fix behavior)
-        vault.SaveTokens(account.Id, new StoredTokens
+        if (File.Exists(credFile))
         {
-            AccessToken = initialToken,
-            RefreshToken = "legacy-cli-refresh-token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-        });
+            originalContent = File.ReadAllText(credFile);
+        }
 
-        bool oauthTokenEndpointCalled = false;
-        var handler = new MockHttpMessageHandler(req =>
+        try
         {
-            if (req.RequestUri!.ToString().Contains("oauth/token"))
+            Directory.CreateDirectory(credDir);
+            File.WriteAllText(credFile, """{"claudeAiOauth":{"accessToken":"test-claude-host-token","expiresAt":2000000000000}}""");
+            if (originalContent == null)
             {
-                oauthTokenEndpointCalled = true;
-                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                {
-                    Content = new TrackingContent("""{"access_token":"unexpected-token"}""")
-                };
+                createdCredFile = true;
             }
-            return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+
+            var vault = new WindowsCredentialVault();
+            var account = new AccountConfig { Id = "test-claude-legacy-vault", Provider = ProviderId.Claude };
+            var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
+            Assert.Equal("test-claude-host-token", scannedAt);
+
+            // Pre-populate vault with a legacy refresh token (simulating pre-fix behavior)
+            vault.SaveTokens(account.Id, new StoredTokens
             {
-                Content = new TrackingContent("Unauthorized")
-            };
-        });
-        using var client = new HttpClient(handler);
-        var provider = new ClaudeProvider();
+                AccessToken = scannedAt!,
+                RefreshToken = "legacy-cli-refresh-token",
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+            });
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
+            bool oauthTokenEndpointCalled = false;
+            var handler = new MockHttpMessageHandler(req =>
+            {
+                if (req.RequestUri!.ToString().Contains("oauth/token"))
+                {
+                    oauthTokenEndpointCalled = true;
+                    return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                    {
+                        Content = new TrackingContent("""{"access_token":"unexpected-token"}""")
+                    };
+                }
+                return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+                {
+                    Content = new TrackingContent("Unauthorized")
+                };
+            });
+            using var client = new HttpClient(handler);
+            var provider = new ClaudeProvider();
 
-        // Verify that the legacy refresh token was purged from vault and oauth token endpoint was not called
-        Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called when legacy CLI refresh token was purged");
-        var updatedTokens = vault.GetTokens(account.Id);
-        Assert.NotNull(updatedTokens);
-        Assert.Null(updatedTokens.RefreshToken);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
+
+            // Verify that the legacy refresh token was purged from vault and oauth token endpoint was not called
+            Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called when legacy CLI refresh token was purged");
+            var updatedTokens = vault.GetTokens(account.Id);
+            Assert.NotNull(updatedTokens);
+            Assert.Null(updatedTokens.RefreshToken);
+        }
+        finally
+        {
+            if (createdCredFile)
+            {
+                try { File.Delete(credFile); } catch { }
+            }
+            else if (originalContent != null)
+            {
+                try { File.WriteAllText(credFile, originalContent); } catch { }
+            }
+        }
     }
 
     [Fact]
