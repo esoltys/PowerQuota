@@ -1,4 +1,5 @@
 using Xunit;
+using PowerQuota.Core.Engine;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Providers;
 using PowerQuota.Core.Storage;
@@ -1225,6 +1226,85 @@ public class ProviderTests
         Assert.Single(snapshot.Windows);
         Assert.Equal("Session", snapshot.Windows[0].Label);
         Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+    }
+
+    [Fact]
+    public async Task GeminiProvider_FetchAsync_FallsBackToPublicEndpoint_WhenDailyEndpointFails()
+    {
+        var vault = new WindowsCredentialVault();
+        var account = new AccountConfig { Id = "test-gemini-fallback", Provider = ProviderId.Gemini };
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "test-token" });
+
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            var uri = req.RequestUri!.ToString();
+            // Primary daily endpoint throws error / 404
+            if (uri.Contains("daily-cloudcode-pa.googleapis.com"))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound)
+                {
+                    Content = new TrackingContent("Endpoint not found")
+                };
+            }
+            // Fallback public endpoint succeeds
+            if (uri.Contains("loadCodeAssist"))
+            {
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new TrackingContent("""{"currentTier":{"id":"standard-tier"}}""")
+                };
+            }
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"groups":[{"displayName":"Gemini Models","buckets":[{"window":"5h","remainingFraction":0.75}]}]}""")
+            };
+        });
+
+        using var client = new HttpClient(handler);
+        var provider = new GeminiProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Equal("Standard", snapshot.Identity.Plan);
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Session", snapshot.Windows[0].Label);
+        Assert.Equal(25.0f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
+    }
+
+    [Fact]
+    public void QuotaRefreshService_ResetBackoff_ClearsBackoffForProvider()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "PowerQuotaTests", Guid.NewGuid().ToString());
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var configStorage = new ConfigStorage(tempDir);
+            var vault = new WindowsCredentialVault(tempDir);
+            using var service = new QuotaRefreshService(configStorage, vault, autoStartTimer: false);
+
+            var accState = new ProviderAccountRuntimeState
+            {
+                Provider = ProviderId.Gemini,
+                AccountId = "acc-gemini",
+                ConsecutiveFailures = 3,
+                RetryAfter = DateTimeOffset.UtcNow.AddMinutes(10)
+            };
+            service.State.ProviderAccounts.Add(accState);
+            Assert.True(accState.IsBackingOff);
+
+            service.ResetBackoff(ProviderId.Gemini);
+            Assert.False(accState.IsBackingOff);
+            Assert.Null(accState.RetryAfter);
+            Assert.Equal(0u, accState.ConsecutiveFailures);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+            {
+                try { Directory.Delete(tempDir, recursive: true); } catch { }
+            }
+        }
     }
 }
 
