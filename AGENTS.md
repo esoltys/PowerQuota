@@ -30,6 +30,11 @@ win-x64, zip, GitHub release). Store packaging (MSIX) is a separate,
 manual flow — see `.agents/rules/store-packaging.md` for the
 environment variables and steps involved.
 
+## Issue priority & status
+
+Priority and Status are tracked as fields on the GitHub Project, not as labels or
+in-body text — see `docs/ISSUE_PRIORITY.md` for the scheme and the `gh project` commands.
+
 ## Pull requests & GitHub CLI
 
 When creating or editing PRs with `gh pr create` / `gh pr edit` from
