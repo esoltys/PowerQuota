@@ -192,7 +192,65 @@ public class ProviderTests
         Assert.Equal(78.0f, snapshot.Windows[1].UsedPercent);
         Assert.NotNull(snapshot.ExtraUsage);
         Assert.True(snapshot.ExtraUsage!.IsActive);
-        Assert.Equal(13814.0f, snapshot.ExtraUsage.UsedPercent);
+        // No monthly_limit or utilization present, so UsedPercent falls back to 0.
+        Assert.Equal(0f, snapshot.ExtraUsage.UsedPercent);
+        Assert.NotNull(snapshot.ExtraUsage.Cost);
+        Assert.Equal(13814.0, snapshot.ExtraUsage.Cost!.Used);
+        Assert.Null(snapshot.ExtraUsage.Cost.Limit);
+        Assert.Equal("CAD", snapshot.ExtraUsage.Cost.Units);
+    }
+
+    [Fact]
+    public void ClaudeProvider_ParsesExtraUsageWithMonthlyLimitAndUtilization()
+    {
+        var json = """
+        {
+            "extra_usage": {
+                "is_enabled": true,
+                "used_credits": 25.50,
+                "monthly_limit": 100.0,
+                "currency": "USD",
+                "utilization": 30.5
+            }
+        }
+        """;
+
+        var snapshot = ClaudeProvider.ParseUsage(json);
+
+        Assert.NotNull(snapshot.ExtraUsage);
+        Assert.True(snapshot.ExtraUsage!.IsActive);
+        // utilization is present, so it takes precedence over used_credits / monthly_limit.
+        Assert.Equal(30.5f, snapshot.ExtraUsage.UsedPercent);
+        Assert.NotNull(snapshot.ExtraUsage.Cost);
+        Assert.Equal(25.50, snapshot.ExtraUsage.Cost!.Used);
+        Assert.Equal(100.0, snapshot.ExtraUsage.Cost.Limit);
+        Assert.Equal("USD", snapshot.ExtraUsage.Cost.Units);
+    }
+
+    [Fact]
+    public void ClaudeProvider_ParsesExtraUsageWithMonthlyLimitButNoUtilization()
+    {
+        var json = """
+        {
+            "extra_usage": {
+                "is_enabled": true,
+                "used_credits": 25.0,
+                "monthly_limit": 100.0,
+                "currency": "USD"
+            }
+        }
+        """;
+
+        var snapshot = ClaudeProvider.ParseUsage(json);
+
+        Assert.NotNull(snapshot.ExtraUsage);
+        Assert.True(snapshot.ExtraUsage!.IsActive);
+        // No utilization present, so UsedPercent is computed from used_credits / monthly_limit.
+        Assert.Equal(25.0f, snapshot.ExtraUsage.UsedPercent);
+        Assert.NotNull(snapshot.ExtraUsage.Cost);
+        Assert.Equal(25.0, snapshot.ExtraUsage.Cost!.Used);
+        Assert.Equal(100.0, snapshot.ExtraUsage.Cost.Limit);
+        Assert.Equal("USD", snapshot.ExtraUsage.Cost.Units);
     }
 
     [Fact]
