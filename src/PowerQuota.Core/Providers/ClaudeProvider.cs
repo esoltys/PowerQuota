@@ -278,15 +278,41 @@ public class ClaudeProvider : IProviderAdapter
         if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("extra_usage", out var eu) && eu.ValueKind == JsonValueKind.Object)
         {
             var isEnabled = eu.TryGetProperty("is_enabled", out var act) && act.ValueKind == JsonValueKind.True;
-            float usedCredits = 0f;
+
+            double usedCredits = 0;
             if (eu.TryGetProperty("used_credits", out var uc) && uc.ValueKind == JsonValueKind.Number)
             {
-                uc.TryGetSingle(out usedCredits);
+                uc.TryGetDouble(out usedCredits);
             }
+
+            double? monthlyLimit = null;
+            if (eu.TryGetProperty("monthly_limit", out var ml) && ml.ValueKind == JsonValueKind.Number && ml.TryGetDouble(out var limitVal))
+            {
+                monthlyLimit = limitVal;
+            }
+
+            string currency = eu.TryGetProperty("currency", out var curr) && curr.ValueKind == JsonValueKind.String
+                ? curr.GetString() ?? "USD"
+                : "USD";
+
+            float? utilization = null;
+            if (eu.TryGetProperty("utilization", out var util) && util.ValueKind == JsonValueKind.Number && util.TryGetSingle(out var utilVal))
+            {
+                utilization = utilVal;
+            }
+
+            float usedPercent = utilization ?? (monthlyLimit is > 0 ? (float)(usedCredits / monthlyLimit.Value * 100.0) : 0f);
+
             extraUsage = new ExtraUsageState
             {
                 IsActive = isEnabled,
-                UsedPercent = usedCredits
+                UsedPercent = usedPercent,
+                Cost = new ProviderCost
+                {
+                    Used = usedCredits,
+                    Limit = monthlyLimit,
+                    Units = currency
+                }
             };
         }
 

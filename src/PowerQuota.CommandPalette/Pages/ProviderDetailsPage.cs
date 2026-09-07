@@ -140,7 +140,21 @@ public class ProviderDetailsPage : ListPage
                 {
                     items.Add(new ListItem(new NoOpCommand())
                     {
-                        Title = $"Credits / Cost: {cost.Used:N2} {cost.Units}",
+                        Title = $"Credits / Cost: {FormatCost(cost)}",
+                        Subtitle = $"Account: {snapshot.Identity.Email ?? acc.Label}",
+                        Icon = new IconInfo("\uE825")
+                    });
+                }
+
+                if (snapshot.ExtraUsage is { IsActive: true } extraUsage)
+                {
+                    string extraTitle = extraUsage.Cost is { } extraCost
+                        ? $"Extra Usage: {FormatCost(extraCost)}"
+                        : $"Extra Usage: {extraUsage.UsedPercent:0}% used";
+
+                    items.Add(new ListItem(new NoOpCommand())
+                    {
+                        Title = extraTitle,
                         Subtitle = $"Account: {snapshot.Identity.Email ?? acc.Label}",
                         Icon = new IconInfo("\uE825")
                     });
@@ -205,6 +219,13 @@ public class ProviderDetailsPage : ListPage
             ProviderId.Kimi => $"Kimi: Configure API key or OpenCode auth ({error ?? "Key required"})",
             _ => error ?? "Login required"
         };
+    }
+
+    private static string FormatCost(ProviderCost cost)
+    {
+        return cost.Limit is { } limit
+            ? $"{cost.Used:N2} / {limit:N2} {cost.Units}"
+            : $"{cost.Used:N2} {cost.Units}";
     }
 
     private static string GetProgressBar(float percent, int totalBlocks = 6)
