@@ -561,6 +561,86 @@ public class ProviderTests
     }
 
     [Fact]
+    public void CopilotProvider_SkipsUnlimitedQuotaSnapshots()
+    {
+        var json = """
+        {
+            "login": "octocat",
+            "access_type_sku": "copilot_enterprise",
+            "quota_reset_date_utc": "2026-09-01T00:00:00Z",
+            "quota_snapshots": {
+                "chat": {
+                    "unlimited": true,
+                    "entitlement": 500,
+                    "remaining": 500
+                },
+                "completions": {
+                    "entitlement": 1000,
+                    "remaining": 200
+                }
+            }
+        }
+        """;
+
+        var snapshot = CopilotProvider.ParseUsage(json);
+
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Completions", snapshot.Windows[0].Label);
+    }
+
+    [Fact]
+    public void CopilotProvider_SurfacesOverageCount()
+    {
+        var json = """
+        {
+            "login": "octocat",
+            "access_type_sku": "copilot_for_business",
+            "quota_reset_date_utc": "2026-09-01T00:00:00Z",
+            "quota_snapshots": {
+                "premium_interactions": {
+                    "entitlement": 50,
+                    "remaining": 0,
+                    "overage_count": 12
+                }
+            }
+        }
+        """;
+
+        var snapshot = CopilotProvider.ParseUsage(json);
+
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Premium Interactions", snapshot.Windows[0].Label);
+        Assert.Equal(100.0f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Contains("over plan by 12", snapshot.Windows[0].ResetDescription);
+    }
+
+    [Fact]
+    public void CopilotProvider_FormatsTokenBasedBillingAsDollars()
+    {
+        var json = """
+        {
+            "login": "octocat",
+            "access_type_sku": "copilot_pro",
+            "token_based_billing": true,
+            "quota_reset_date_utc": "2026-09-01T00:00:00Z",
+            "quota_snapshots": {
+                "premium_interactions": {
+                    "entitlement": 200000,
+                    "remaining": 150000
+                }
+            }
+        }
+        """;
+
+        var snapshot = CopilotProvider.ParseUsage(json);
+
+        Assert.Single(snapshot.Windows);
+        Assert.Equal("Credits", snapshot.Windows[0].Label);
+        Assert.Equal(25.0f, snapshot.Windows[0].UsedPercent, 1);
+        Assert.Equal("$500.00 / $2000.00", snapshot.Windows[0].ResetDescription);
+    }
+
+    [Fact]
     public void CodexProvider_ParsesFreeTierMonthlyWindowCorrectly()
     {
         var json = """
