@@ -93,6 +93,8 @@ public class CopilotProvider : IProviderAdapter
             resetDate = parsedRd;
         }
 
+        bool tokenBasedBilling = root.TryGetProperty("token_based_billing", out var tbb) && tbb.ValueKind == JsonValueKind.True;
+
         if (root.TryGetProperty("quota_snapshots", out var snapshots))
         {
             if (snapshots.ValueKind == JsonValueKind.Object)
@@ -104,6 +106,12 @@ public class CopilotProvider : IProviderAdapter
 
                     string rawKey = prop.Name;
                     string label = FormatSnapshotLabel(rawKey);
+
+                    // Uncapped quota: nothing meaningful to show as a percentage
+                    if (snapshotObj.TryGetProperty("unlimited", out var unl) && unl.ValueKind == JsonValueKind.True)
+                    {
+                        continue;
+                    }
 
                     snapshotObj.TryGetPropertyInt32("entitlement", out var entitlement);
                     snapshotObj.TryGetPropertyInt32("remaining", out var remaining);
@@ -128,13 +136,36 @@ public class CopilotProvider : IProviderAdapter
                         usedPct = up;
                     }
 
-                    string unit = rawKey.Contains("completion", StringComparison.OrdinalIgnoreCase) ? "completions"
-                        : rawKey.Contains("chat", StringComparison.OrdinalIgnoreCase) ? "messages"
-                        : "requests";
+                    bool isPremiumInteractions = rawKey.Equals("premium_interactions", StringComparison.OrdinalIgnoreCase);
+                    bool billedInDollars = tokenBasedBilling && isPremiumInteractions;
 
-                    string desc = entitlement > 0
-                        ? $"{entitlement - remaining} / {entitlement} {unit}"
-                        : $"{remaining} {unit} remaining";
+                    if (billedInDollars)
+                    {
+                        label = "Credits";
+                    }
+
+                    string desc;
+                    if (billedInDollars)
+                    {
+                        decimal usedDollars = (entitlement - remaining) / 100m;
+                        decimal totalDollars = entitlement / 100m;
+                        desc = $"${usedDollars:0.00} / ${totalDollars:0.00}";
+                    }
+                    else
+                    {
+                        string unit = rawKey.Contains("completion", StringComparison.OrdinalIgnoreCase) ? "completions"
+                            : rawKey.Contains("chat", StringComparison.OrdinalIgnoreCase) ? "messages"
+                            : "requests";
+
+                        desc = entitlement > 0
+                            ? $"{entitlement - remaining} / {entitlement} {unit}"
+                            : $"{remaining} {unit} remaining";
+                    }
+
+                    if (snapshotObj.TryGetPropertyInt32("overage_count", out var overageCount) && overageCount > 0)
+                    {
+                        desc += $" (over plan by {overageCount})";
+                    }
 
                     windows.Add(new UsageWindow
                     {
