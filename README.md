@@ -219,7 +219,7 @@ PowerQuota provides several PowerShell helper scripts in the repository root to 
 |---|---|---|
 | [`register.ps1`](register.ps1) | Publishes, registers the local developer AppX package, cleans stale bands, and hot-reloads Command Palette. | `.\register.ps1` |
 | [`reload.ps1`](reload.ps1) | Rapid inner-loop build and hot-reload for code/UI iterations without re-registering. | `.\reload.ps1` |
-| [`build-msix.ps1`](build-msix.ps1) | Automated MSIX packager; builds signed local testing packages or unsigned packages for Microsoft Store submission. | `.\build-msix.ps1 -Install`<br>`.\build-msix.ps1 -ForStore -Version 1.8.0.0` |
+| [`build-msix.ps1`](build-msix.ps1) | Automated MSIX packager; builds signed local testing packages or unsigned packages for Microsoft Store submission. | `.\build-msix.ps1 -Install`<br>`.\build-msix.ps1 -ForStore -Version 1.9.0.0` |
 | [`uninstall-powerquota.ps1`](uninstall-powerquota.ps1) | Safely removes sideloaded developer AppX packages and cleans stale Command Palette provider caches and orphaned dock bands (preserving Store installs). | `.\uninstall-powerquota.ps1 -ClearCache -ReloadCmdPal` |
 
 ### Managing Sideloaded Builds vs. Microsoft Store Releases
