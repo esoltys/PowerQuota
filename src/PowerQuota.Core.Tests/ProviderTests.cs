@@ -1017,6 +1017,27 @@ public class ProviderTests
         Assert.Equal(50.0f, snapshot.Windows[1].UsedPercent);
     }
 
+    /// <summary>
+    /// Claude Desktop's usage cache is now a fallback source for ClaudeProvider (see HostCliScanner.
+    /// ScanClaudeDesktopUsageHistory). Tests that assert a hard failure (no fallback available) must run
+    /// with that file out of the way, since a real Claude Desktop install on the dev/CI machine would
+    /// otherwise let the fallback succeed and mask the behavior under test.
+    /// </summary>
+    private static async Task WithDesktopCacheSuppressedAsync(Func<Task> test)
+    {
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude", "plan-usage-history.json");
+        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
+        try
+        {
+            if (originalContent != null) File.Delete(path);
+            await test();
+        }
+        finally
+        {
+            if (originalContent != null) File.WriteAllText(path, originalContent);
+        }
+    }
+
     private class TrackingContent : StringContent
     {
         public bool IsDisposed { get; private set; }
@@ -1059,34 +1080,37 @@ public class ProviderTests
     [Fact]
     public async Task ClaudeProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
     {
-        var vault = new WindowsCredentialVault();
-        var account = new AccountConfig { Id = "test-claude", Provider = ProviderId.Claude };
-        var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-        var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "test-token";
-        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = initialToken });
-
-        // 1. Success
-        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        await WithDesktopCacheSuppressedAsync(async () =>
         {
-            Content = new TrackingContent("""{"five_hour":{"utilization":10.0}}""")
-        });
-        using var client = new HttpClient(handler);
-        var provider = new ClaudeProvider();
+            var vault = new WindowsCredentialVault();
+            var account = new AccountConfig { Id = "test-claude", Provider = ProviderId.Claude };
+            var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
+            var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "test-token";
+            vault.SaveTokens(account.Id, new StoredTokens { AccessToken = initialToken });
 
-        var snapshot = await provider.FetchAsync(account, vault, client);
-        Assert.NotNull(snapshot);
-        Assert.Single(handler.ReturnedContents);
-        Assert.True(handler.ReturnedContents[0].IsDisposed);
+            // 1. Success
+            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"five_hour":{"utilization":10.0}}""")
+            });
+            using var client = new HttpClient(handler);
+            var provider = new ClaudeProvider();
 
-        // 2. 401 Unauthorized
-        var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
-        {
-            Content = new TrackingContent("Unauthorized")
+            var snapshot = await provider.FetchAsync(account, vault, client);
+            Assert.NotNull(snapshot);
+            Assert.Single(handler.ReturnedContents);
+            Assert.True(handler.ReturnedContents[0].IsDisposed);
+
+            // 2. 401 Unauthorized
+            var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+            {
+                Content = new TrackingContent("Unauthorized")
+            });
+            using var unauthClient = new HttpClient(unauthHandler);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
+            Assert.Single(unauthHandler.ReturnedContents);
+            Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
         });
-        using var unauthClient = new HttpClient(unauthHandler);
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
-        Assert.Single(unauthHandler.ReturnedContents);
-        Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
     }
 
     [Fact]
@@ -1138,73 +1162,17 @@ public class ProviderTests
     [Fact]
     public async Task ClaudeProvider_FetchAsync_HostCliAccount_DoesNotCallOAuthRefresh_WhenTokenIs401()
     {
-        var vault = new WindowsCredentialVault();
-        var account = new AccountConfig { Id = "test-claude-cli-401", Provider = ProviderId.Claude };
-        var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-        var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "host-token";
-
-        vault.SaveTokens(account.Id, new StoredTokens
+        await WithDesktopCacheSuppressedAsync(async () =>
         {
-            AccessToken = initialToken,
-            RefreshToken = null, // Host CLI accounts do not retain refresh tokens
-            ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-        });
-
-        bool oauthTokenEndpointCalled = false;
-        var handler = new MockHttpMessageHandler(req =>
-        {
-            if (req.RequestUri!.ToString().Contains("oauth/token"))
-            {
-                oauthTokenEndpointCalled = true;
-                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                {
-                    Content = new TrackingContent("""{"access_token":"unexpected-token"}""")
-                };
-            }
-            return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
-            {
-                Content = new TrackingContent("Unauthorized")
-            };
-        });
-        using var client = new HttpClient(handler);
-        var provider = new ClaudeProvider();
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
-        Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called for host CLI accounts");
-    }
-
-    [Fact]
-    public async Task ClaudeProvider_FetchAsync_HostCliAccount_PurgesLegacyRefreshToken_FromVault()
-    {
-        var credDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
-        var credFile = Path.Combine(credDir, ".credentials.json");
-        bool createdCredFile = false;
-        string? originalContent = null;
-
-        if (File.Exists(credFile))
-        {
-            originalContent = File.ReadAllText(credFile);
-        }
-
-        try
-        {
-            Directory.CreateDirectory(credDir);
-            File.WriteAllText(credFile, """{"claudeAiOauth":{"accessToken":"test-claude-host-token","expiresAt":2000000000000}}""");
-            if (originalContent == null)
-            {
-                createdCredFile = true;
-            }
-
             var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude-legacy-vault", Provider = ProviderId.Claude };
+            var account = new AccountConfig { Id = "test-claude-cli-401", Provider = ProviderId.Claude };
             var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-            Assert.Equal("test-claude-host-token", scannedAt);
+            var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "host-token";
 
-            // Pre-populate vault with a legacy refresh token (simulating pre-fix behavior)
             vault.SaveTokens(account.Id, new StoredTokens
             {
-                AccessToken = scannedAt!,
-                RefreshToken = "legacy-cli-refresh-token",
+                AccessToken = initialToken,
+                RefreshToken = null, // Host CLI accounts do not retain refresh tokens
                 ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
             });
 
@@ -1228,23 +1196,163 @@ public class ProviderTests
             var provider = new ClaudeProvider();
 
             await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
+            Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called for host CLI accounts");
+        });
+    }
 
-            // Verify that the legacy refresh token was purged from vault and oauth token endpoint was not called
-            Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called when legacy CLI refresh token was purged");
-            var updatedTokens = vault.GetTokens(account.Id);
-            Assert.NotNull(updatedTokens);
-            Assert.Null(updatedTokens.RefreshToken);
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_HostCliAccount_PurgesLegacyRefreshToken_FromVault()
+    {
+        await WithDesktopCacheSuppressedAsync(async () =>
+        {
+            var credDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
+            var credFile = Path.Combine(credDir, ".credentials.json");
+            bool createdCredFile = false;
+            string? originalContent = null;
+
+            if (File.Exists(credFile))
+            {
+                originalContent = File.ReadAllText(credFile);
+            }
+
+            try
+            {
+                Directory.CreateDirectory(credDir);
+                File.WriteAllText(credFile, """{"claudeAiOauth":{"accessToken":"test-claude-host-token","expiresAt":2000000000000}}""");
+                if (originalContent == null)
+                {
+                    createdCredFile = true;
+                }
+
+                var vault = new WindowsCredentialVault();
+                var account = new AccountConfig { Id = "test-claude-legacy-vault", Provider = ProviderId.Claude };
+                var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
+                Assert.Equal("test-claude-host-token", scannedAt);
+
+                // Pre-populate vault with a legacy refresh token (simulating pre-fix behavior)
+                vault.SaveTokens(account.Id, new StoredTokens
+                {
+                    AccessToken = scannedAt!,
+                    RefreshToken = "legacy-cli-refresh-token",
+                    ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+                });
+
+                bool oauthTokenEndpointCalled = false;
+                var handler = new MockHttpMessageHandler(req =>
+                {
+                    if (req.RequestUri!.ToString().Contains("oauth/token"))
+                    {
+                        oauthTokenEndpointCalled = true;
+                        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                        {
+                            Content = new TrackingContent("""{"access_token":"unexpected-token"}""")
+                        };
+                    }
+                    return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+                    {
+                        Content = new TrackingContent("Unauthorized")
+                    };
+                });
+                using var client = new HttpClient(handler);
+                var provider = new ClaudeProvider();
+
+                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
+
+                // Verify that the legacy refresh token was purged from vault and oauth token endpoint was not called
+                Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called when legacy CLI refresh token was purged");
+                var updatedTokens = vault.GetTokens(account.Id);
+                Assert.NotNull(updatedTokens);
+                Assert.Null(updatedTokens.RefreshToken);
+            }
+            finally
+            {
+                if (createdCredFile)
+                {
+                    try { File.Delete(credFile); } catch { }
+                }
+                else if (originalContent != null)
+                {
+                    try { File.WriteAllText(credFile, originalContent); } catch { }
+                }
+            }
+        });
+    }
+
+    [Fact]
+    public void HostCliScanner_ScanClaudeDesktopUsageHistory_ReturnsLatestSampleByTimestamp()
+    {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
+        var path = Path.Combine(dir, "plan-usage-history.json");
+        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(path, """
+            {"version":1,"samples":[
+                {"t":1000,"org":"org-a","u":{"fh":10,"sd":20}},
+                {"t":3000,"org":"org-a","u":{"fh":30,"sd":40}},
+                {"t":2000,"org":"org-a","u":{"fh":99,"sd":99}}
+            ]}
+            """);
+
+            var (fh, sd, sampledAt) = HostCliScanner.ScanClaudeDesktopUsageHistory();
+
+            // Must pick the entry with the highest "t", not the last one in array order.
+            Assert.Equal(30f, fh);
+            Assert.Equal(40f, sd);
+            Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(3000), sampledAt);
         }
         finally
         {
-            if (createdCredFile)
+            if (originalContent != null) File.WriteAllText(path, originalContent);
+            else if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_FallsBackToDesktopCache_WhenSessionExpiredAndNoRefreshTokenAvailable()
+    {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
+        var path = Path.Combine(dir, "plan-usage-history.json");
+        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(path, """{"version":1,"samples":[{"t":123456789,"org":"org-a","u":{"fh":42,"sd":77}}]}""");
+
+            var vault = new WindowsCredentialVault();
+            var account = new AccountConfig { Id = "test-claude-desktop-fallback-expired", Provider = ProviderId.Claude };
+            vault.SaveTokens(account.Id, new StoredTokens
             {
-                try { File.Delete(credFile); } catch { }
-            }
-            else if (originalContent != null)
+                AccessToken = "stale-token-not-matching-any-real-session",
+                RefreshToken = null, // no manual refresh token and (for this test) no live CLI session either
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+            });
+
+            // Every usage request comes back 401; the provider must fall back to the desktop cache
+            // instead of throwing, and must never need the oauth/token endpoint to do so.
+            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
             {
-                try { File.WriteAllText(credFile, originalContent); } catch { }
-            }
+                Content = new TrackingContent("Unauthorized")
+            });
+            using var client = new HttpClient(handler);
+            var provider = new ClaudeProvider();
+
+            var snapshot = await provider.FetchAsync(account, vault, client);
+
+            Assert.Equal("Claude Desktop cache", snapshot.Source);
+            Assert.Equal(2, snapshot.Windows.Count);
+            Assert.Contains(snapshot.Windows, w => w.Label == "Session" && Math.Abs(w.UsedPercent - 42f) < 0.01f);
+            Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 77f) < 0.01f);
+            Assert.All(snapshot.Windows, w => Assert.Equal(
+                "From Claude Desktop cache — log in for live data & reset times", w.ResetDescription));
+        }
+        finally
+        {
+            if (originalContent != null) File.WriteAllText(path, originalContent);
+            else if (File.Exists(path)) File.Delete(path);
         }
     }
 

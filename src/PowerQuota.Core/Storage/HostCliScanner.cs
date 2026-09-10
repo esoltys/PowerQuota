@@ -259,6 +259,51 @@ public static class HostCliScanner
         return (null, null, null);
     }
 
+    /// <summary>
+    /// Reads Claude Desktop's own locally cached usage samples (%APPDATA%\Claude\plan-usage-history.json).
+    /// Claude Desktop writes these samples itself during normal use — no token or network call is involved.
+    /// Used as a last-resort fallback when no Claude Code CLI session or manual OAuth token is available,
+    /// so users who only use Claude Desktop aren't forced to run the CLI just to get a quota reading.
+    /// </summary>
+    public static (float? FiveHourPercent, float? SevenDayPercent, DateTimeOffset? SampledAt) ScanClaudeDesktopUsageHistory()
+    {
+        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude", "plan-usage-history.json");
+        if (!File.Exists(path)) return (null, null, null);
+
+        try
+        {
+            var json = File.ReadAllText(path);
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Array)
+                return (null, null, null);
+
+            long latestT = -1;
+            float? fh = null;
+            float? sd = null;
+
+            foreach (var sample in samples.EnumerateArray())
+            {
+                if (sample.ValueKind != JsonValueKind.Object) continue;
+                if (!sample.TryGetProperty("t", out var tProp) || !tProp.TryGetInt64(out var t) || t <= latestT) continue;
+                if (!sample.TryGetProperty("u", out var u) || u.ValueKind != JsonValueKind.Object) continue;
+
+                float? sampleFh = u.TryGetProperty("fh", out var fhProp) && fhProp.ValueKind == JsonValueKind.Number && fhProp.TryGetSingle(out var fhVal) ? fhVal : null;
+                float? sampleSd = u.TryGetProperty("sd", out var sdProp) && sdProp.ValueKind == JsonValueKind.Number && sdProp.TryGetSingle(out var sdVal) ? sdVal : null;
+                if (sampleFh is null && sampleSd is null) continue;
+
+                latestT = t;
+                fh = sampleFh;
+                sd = sampleSd;
+            }
+
+            return latestT >= 0 ? (fh, sd, DateTimeOffset.FromUnixTimeMilliseconds(latestT)) : (null, null, null);
+        }
+        catch
+        {
+            return (null, null, null);
+        }
+    }
+
     public static (string? AccessToken, string? RefreshToken) ScanCursorIdeTokens()
     {
         var dbPath = Path.Combine(
