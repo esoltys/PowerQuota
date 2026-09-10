@@ -54,6 +54,21 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
     }
 }
 
+# MSIX manifests require a 4-part numeric version (Major.Minor.Build.Revision), but the repo's
+# own -Version convention (Directory.Build.props, release tags) is 3-part (e.g. "1.9.0"). Accept
+# either: $Version keeps whatever was passed (used for artifact filenames, matching
+# store-packaging.md's documented naming), while $ManifestVersion is always 4-part for the
+# AppxManifest.xml, which MakeAppx rejects otherwise.
+$versionParts = $Version -split "\."
+if ($versionParts.Count -eq 3) {
+    $ManifestVersion = "$Version.0"
+} elseif ($versionParts.Count -eq 4) {
+    $ManifestVersion = $Version
+} else {
+    Write-Error "Version '$Version' must have 3 or 4 dot-separated numeric parts (e.g. 1.9.0 or 1.9.0.0)."
+    exit 1
+}
+
 function Get-ConfigEnvVar([string]$name) {
     $val = [System.Environment]::GetEnvironmentVariable($name, "Process")
     if ([string]::IsNullOrWhiteSpace($val)) {
@@ -146,8 +161,8 @@ function Build-ArchitecturePackage([string]$targetRuntime) {
         [xml]$manifest = Get-Content $manifestPath
         $modified = $false
 
-        if ($Version) {
-            $manifest.Package.Identity.Version = $Version
+        if ($ManifestVersion) {
+            $manifest.Package.Identity.Version = $ManifestVersion
             $modified = $true
         }
         if ($PackageIdentityName) {
@@ -231,7 +246,7 @@ if ($Bundle) {
     }
 
     Write-Step "Creating MSIX Bundle with MakeAppx ($bundleFileName)..."
-    & $makeAppx bundle /d "$bundleStagingDir" /p "$bundlePath" /bv "$Version" /o /v | Out-Host
+    & $makeAppx bundle /d "$bundleStagingDir" /p "$bundlePath" /bv "$ManifestVersion" /o /v | Out-Host
 
     if ($LASTEXITCODE -ne 0) {
         Write-Error "MakeAppx bundle failed with exit code $LASTEXITCODE"
