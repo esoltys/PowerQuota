@@ -28,6 +28,10 @@ public class ClaudeProvider : IProviderAdapter
                 tokens.ExpiresAt = scannedExp;
                 vault.SaveTokens(account.Id, tokens);
             }
+            else if (TryBuildDesktopCacheSnapshot(account) is { } desktopSnapshot)
+            {
+                return desktopSnapshot;
+            }
             else
             {
                 throw new InvalidOperationException("Claude login required");
@@ -138,10 +142,67 @@ public class ClaudeProvider : IProviderAdapter
 
         if (statusCode == System.Net.HttpStatusCode.Unauthorized || statusCode == System.Net.HttpStatusCode.Forbidden || usageJson == null)
         {
+            if (TryBuildDesktopCacheSnapshot(account) is { } desktopSnapshot)
+            {
+                return desktopSnapshot;
+            }
+
             throw new UnauthorizedAccessException("Claude session expired");
         }
 
         return ParseUsage(usageJson, account);
+    }
+
+    /// <summary>
+    /// Last-resort fallback when no CLI session and no usable OAuth token are available: reads the usage
+    /// samples Claude Desktop already writes to disk during normal use (see HostCliScanner.ScanClaudeDesktopUsageHistory).
+    /// No token, request, or login is involved, so the numbers are only as fresh as Desktop's last write and
+    /// carry no reset timestamps or per-model breakdown — the caller should still prompt for a real login
+    /// when possible, which is why every window here carries a ResetDescription note saying so.
+    /// </summary>
+    private static UsageSnapshot? TryBuildDesktopCacheSnapshot(AccountConfig account)
+    {
+        var (fh, sd, sampledAt) = HostCliScanner.ScanClaudeDesktopUsageHistory();
+        if (fh is null && sd is null) return null;
+
+        const string loginNote = "From Claude Desktop cache — log in for live data & reset times";
+        var windows = new List<UsageWindow>();
+
+        if (fh is { } fhVal)
+        {
+            windows.Add(new UsageWindow
+            {
+                Label = "Session",
+                UsedPercent = fhVal,
+                WindowSeconds = 5 * 3600,
+                ResetDescription = loginNote
+            });
+        }
+
+        if (sd is { } sdVal)
+        {
+            windows.Add(new UsageWindow
+            {
+                Label = "Weekly",
+                UsedPercent = sdVal,
+                WindowSeconds = 7 * 24 * 3600,
+                ResetDescription = loginNote
+            });
+        }
+
+        return new UsageSnapshot
+        {
+            Provider = ProviderId.Claude,
+            Source = "Claude Desktop cache",
+            UpdatedAt = sampledAt ?? DateTimeOffset.UtcNow,
+            HeadlineIndex = 0,
+            Windows = windows,
+            Identity = new ProviderIdentity
+            {
+                Email = account.Email,
+                Plan = "Claude Code"
+            }
+        };
     }
 
     private async Task<StoredTokens?> RefreshTokenAsync(string accountId, StoredTokens tokens, WindowsCredentialVault vault, HttpClient client, CancellationToken ct)
