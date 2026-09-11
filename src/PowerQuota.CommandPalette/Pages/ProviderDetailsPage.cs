@@ -149,14 +149,14 @@ public class ProviderDetailsPage : ListPage
                 if (snapshot.ExtraUsage is { IsActive: true } extraUsage)
                 {
                     string extraTitle = extraUsage.Cost is { } extraCost
-                        ? $"Extra Usage: {FormatCost(extraCost)}"
-                        : $"Extra Usage: {extraUsage.UsedPercent:0}% used";
+                        ? $"{extraCost.Used:N2} {extraCost.Units} extra"
+                        : $"{extraUsage.UsedPercent:0}% extra used";
 
                     items.Add(new ListItem(new NoOpCommand())
                     {
                         Title = extraTitle,
                         Subtitle = $"Account: {snapshot.Identity.Email ?? acc.Label}",
-                        Icon = new IconInfo("\uE825")
+                        Icon = ProviderIcons.GetIcon(_provider)
                     });
                 }
             }
