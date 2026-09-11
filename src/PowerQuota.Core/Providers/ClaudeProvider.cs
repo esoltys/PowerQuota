@@ -177,9 +177,18 @@ public class ClaudeProvider : IProviderAdapter
     private static UsageSnapshot? TryBuildDesktopCacheSnapshot(AccountConfig account)
     {
         var (fh, sd, sampledAt) = HostCliScanner.ScanClaudeDesktopUsageHistory();
+
+        // A sample older than its own window's duration is guaranteed to have reset since it was
+        // taken, so showing it as "current" would be actively misleading rather than just stale.
+        var age = sampledAt.HasValue ? DateTimeOffset.UtcNow - sampledAt.Value : (TimeSpan?)null;
+        if (age is { } fhAge && fhAge >= TimeSpan.FromHours(5)) fh = null;
+        if (age is { } sdAge && sdAge >= TimeSpan.FromDays(7)) sd = null;
+
         if (fh is null && sd is null) return null;
 
-        const string loginNote = "From Claude Desktop cache — log in for live data & reset times";
+        string loginNote = age is { } ageVal
+            ? $"From Claude Desktop cache, updated {FormatAge(ageVal)} — log in for live data & reset times"
+            : "From Claude Desktop cache — log in for live data & reset times";
         var windows = new List<UsageWindow>();
 
         if (fh is { } fhVal)
@@ -217,6 +226,14 @@ public class ClaudeProvider : IProviderAdapter
                 Plan = "Claude Code"
             }
         };
+    }
+
+    private static string FormatAge(TimeSpan age)
+    {
+        if (age.TotalMinutes < 1) return "just now";
+        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h {age.Minutes}m ago";
+        return $"{(int)age.TotalDays}d ago";
     }
 
     private async Task<StoredTokens?> RefreshTokenAsync(string accountId, StoredTokens tokens, WindowsCredentialVault vault, HttpClient client, CancellationToken ct)
