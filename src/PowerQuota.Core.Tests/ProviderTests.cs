@@ -1320,7 +1320,8 @@ public class ProviderTests
         try
         {
             Directory.CreateDirectory(dir);
-            File.WriteAllText(path, """{"version":1,"samples":[{"t":123456789,"org":"org-a","u":{"fh":42,"sd":77}}]}""");
+            var recentT = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
+            File.WriteAllText(path, """{"version":1,"samples":[{"t":RECENT_T,"org":"org-a","u":{"fh":42,"sd":77}}]}""".Replace("RECENT_T", recentT.ToString()));
 
             var vault = new WindowsCredentialVault();
             var account = new AccountConfig { Id = "test-claude-desktop-fallback-expired", Provider = ProviderId.Claude };
@@ -1346,8 +1347,8 @@ public class ProviderTests
             Assert.Equal(2, snapshot.Windows.Count);
             Assert.Contains(snapshot.Windows, w => w.Label == "Session" && Math.Abs(w.UsedPercent - 42f) < 0.01f);
             Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 77f) < 0.01f);
-            Assert.All(snapshot.Windows, w => Assert.Equal(
-                "From Claude Desktop cache — log in for live data & reset times", w.ResetDescription));
+            Assert.All(snapshot.Windows, w => Assert.Contains("From Claude Desktop cache, updated", w.ResetDescription));
+            Assert.All(snapshot.Windows, w => Assert.Contains("log in for live data & reset times", w.ResetDescription));
         }
         finally
         {
@@ -1366,7 +1367,8 @@ public class ProviderTests
         try
         {
             Directory.CreateDirectory(dir);
-            File.WriteAllText(path, """{"version":1,"samples":[{"t":123456789,"org":"org-a","u":{"fh":15,"sd":25}}]}""");
+            var recentT = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
+            File.WriteAllText(path, """{"version":1,"samples":[{"t":RECENT_T,"org":"org-a","u":{"fh":15,"sd":25}}]}""".Replace("RECENT_T", recentT.ToString()));
 
             var vault = new WindowsCredentialVault();
             var account = new AccountConfig { Id = "test-claude-desktop-fallback-ratelimited", Provider = ProviderId.Claude };
@@ -1390,6 +1392,59 @@ public class ProviderTests
 
             Assert.Equal("Claude Desktop cache", snapshot.Source);
             Assert.Contains(snapshot.Windows, w => w.Label == "Session" && Math.Abs(w.UsedPercent - 15f) < 0.01f);
+            Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 25f) < 0.01f);
+
+            // The cache can be significantly behind live usage (Claude Desktop only syncs on its own
+            // schedule) so the age of the sample must be surfaced, not just a generic "log in" note.
+            Assert.All(snapshot.Windows, w => Assert.Contains("updated", w.ResetDescription));
+            Assert.All(snapshot.Windows, w => Assert.Contains("ago", w.ResetDescription));
+        }
+        finally
+        {
+            if (originalContent != null) File.WriteAllText(path, originalContent);
+            else if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_RejectsDesktopCache_WhenSampleOlderThanItsOwnWindow()
+    {
+        // A "5-hour session" sample older than 5 hours has definitely already reset — showing it as
+        // current would be misleading rather than just stale, so the fallback must reject it outright
+        // (falling through to the normal error) instead of displaying stale numbers as if live.
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
+        var path = Path.Combine(dir, "plan-usage-history.json");
+        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            var staleT = DateTimeOffset.UtcNow.AddHours(-6).ToUnixTimeMilliseconds();
+            File.WriteAllText(path, """{"version":1,"samples":[{"t":STALE_T,"org":"org-a","u":{"fh":15,"sd":25}}]}""".Replace("STALE_T", staleT.ToString()));
+
+            var vault = new WindowsCredentialVault();
+            var account = new AccountConfig { Id = "test-claude-desktop-fallback-toostale", Provider = ProviderId.Claude };
+            vault.SaveTokens(account.Id, new StoredTokens
+            {
+                AccessToken = "some-token",
+                RefreshToken = null,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+            });
+
+            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+            {
+                Content = new TrackingContent("Too Many Requests")
+            });
+            using var client = new HttpClient(handler);
+            var provider = new ClaudeProvider();
+
+            // The 5-hour "Session" figure is too stale to use, but the 7-day "Weekly" figure from the
+            // same sample is still within its own window, so the fallback should still succeed with
+            // just that window rather than being an all-or-nothing decision.
+            var snapshot = await provider.FetchAsync(account, vault, client);
+
+            Assert.Equal("Claude Desktop cache", snapshot.Source);
+            Assert.DoesNotContain(snapshot.Windows, w => w.Label == "Session");
             Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 25f) < 0.01f);
         }
         finally
