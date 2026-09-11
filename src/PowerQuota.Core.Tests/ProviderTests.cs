@@ -1357,6 +1357,75 @@ public class ProviderTests
     }
 
     [Fact]
+    public async Task ClaudeProvider_FetchAsync_FallsBackToDesktopCache_WhenRateLimited()
+    {
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
+        var path = Path.Combine(dir, "plan-usage-history.json");
+        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
+
+        try
+        {
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(path, """{"version":1,"samples":[{"t":123456789,"org":"org-a","u":{"fh":15,"sd":25}}]}""");
+
+            var vault = new WindowsCredentialVault();
+            var account = new AccountConfig { Id = "test-claude-desktop-fallback-ratelimited", Provider = ProviderId.Claude };
+            vault.SaveTokens(account.Id, new StoredTokens
+            {
+                AccessToken = "some-token",
+                RefreshToken = null,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+            });
+
+            // A 429 must fall back to the desktop cache too, not just 401/403 — previously it propagated
+            // straight past the fallback as an unhandled HttpRequestException.
+            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+            {
+                Content = new TrackingContent("Too Many Requests")
+            });
+            using var client = new HttpClient(handler);
+            var provider = new ClaudeProvider();
+
+            var snapshot = await provider.FetchAsync(account, vault, client);
+
+            Assert.Equal("Claude Desktop cache", snapshot.Source);
+            Assert.Contains(snapshot.Windows, w => w.Label == "Session" && Math.Abs(w.UsedPercent - 15f) < 0.01f);
+            Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 25f) < 0.01f);
+        }
+        finally
+        {
+            if (originalContent != null) File.WriteAllText(path, originalContent);
+            else if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_ThrowsRateLimited_WhenNoDesktopCacheAvailable()
+    {
+        await WithDesktopCacheSuppressedAsync(async () =>
+        {
+            var vault = new WindowsCredentialVault();
+            var account = new AccountConfig { Id = "test-claude-ratelimited-no-cache", Provider = ProviderId.Claude };
+            vault.SaveTokens(account.Id, new StoredTokens
+            {
+                AccessToken = "some-token",
+                RefreshToken = null,
+                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
+            });
+
+            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+            {
+                Content = new TrackingContent("Too Many Requests")
+            });
+            using var client = new HttpClient(handler);
+            var provider = new ClaudeProvider();
+
+            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => provider.FetchAsync(account, vault, client));
+            Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, ex.StatusCode);
+        });
+    }
+
+    [Fact]
     public async Task CursorProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
     {
         var vault = new WindowsCredentialVault();
@@ -1682,6 +1751,28 @@ public class ProviderTests
                 try { Directory.Delete(tempDir, recursive: true); } catch { }
             }
         }
+    }
+
+    [Fact]
+    public void ProviderAccountRuntimeState_GetStatusLine_CountsDownWhileBackingOff()
+    {
+        // The retry message must reflect actual remaining time, not a value frozen at the moment
+        // the rate limit was first hit — otherwise the UI shows a stale countdown forever.
+        var accState = new ProviderAccountRuntimeState
+        {
+            Provider = ProviderId.Claude,
+            AccountId = "acc-claude",
+            Error = "Rate limited",
+            RetryAfter = DateTimeOffset.UtcNow.AddSeconds(50)
+        };
+
+        var firstLine = accState.GetStatusLine();
+        Assert.Matches(@"Rate limited, retrying in (4[5-9]|50)s", firstLine);
+
+        accState.RetryAfter = DateTimeOffset.UtcNow.AddSeconds(5);
+        var laterLine = accState.GetStatusLine();
+        Assert.Matches(@"Rate limited, retrying in [0-5]s", laterLine);
+        Assert.NotEqual(firstLine, laterLine);
     }
 }
 

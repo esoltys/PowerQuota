@@ -162,7 +162,7 @@ public class ProviderDetailsPage : ListPage
             }
             else
             {
-                string guidance = GetLoginGuidance(_provider, acc.Error);
+                string guidance = GetLoginGuidance(_provider, acc);
                 string itemTitle = accounts.Count > 1 ? $"{_provider.GetLabel()} Quota ({acc.Label})" : $"{_provider.GetLabel()} Quota";
                 items.Add(new ListItem(new AnonymousCommand(() =>
                 {
@@ -201,13 +201,14 @@ public class ProviderDetailsPage : ListPage
         return items.ToArray();
     }
 
-    private static string GetLoginGuidance(ProviderId provider, string? error)
+    private static string GetLoginGuidance(ProviderId provider, ProviderAccountRuntimeState acc)
     {
-        if (!string.IsNullOrEmpty(error) && error.StartsWith("Rate limited", StringComparison.OrdinalIgnoreCase))
+        if (acc.IsBackingOff)
         {
-            return $"API Rate Limit Cooldown • {error}";
+            return $"API Rate Limit Cooldown • {acc.GetStatusLine()}";
         }
 
+        string? error = acc.Error;
         return provider switch
         {
             ProviderId.Claude => $"Claude Code CLI: Run 'claude' in terminal to login ({error ?? "Login required"})",

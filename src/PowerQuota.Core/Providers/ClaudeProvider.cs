@@ -110,7 +110,21 @@ public class ClaudeProvider : IProviderAdapter
             return (response.StatusCode, json);
         }
 
-        var (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+        System.Net.HttpStatusCode statusCode;
+        string? usageJson;
+        try
+        {
+            (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+        {
+            if (TryBuildDesktopCacheSnapshot(account) is { } rateLimitedSnapshot)
+            {
+                return rateLimitedSnapshot;
+            }
+
+            throw;
+        }
 
         // Reactive refresh on 401 Unauthorized
         if (statusCode == System.Net.HttpStatusCode.Unauthorized)

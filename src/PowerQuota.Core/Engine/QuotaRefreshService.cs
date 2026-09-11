@@ -424,7 +424,7 @@ public class QuotaRefreshService : IDisposable
                     // Backoff 2^failures * 30 seconds
                     var backoffSec = Math.Min(3600, (int)Math.Pow(2, accountState.ConsecutiveFailures) * 30);
                     accountState.RetryAfter = DateTimeOffset.UtcNow.AddSeconds(backoffSec);
-                    accountState.Error = $"Rate limited, retrying in {backoffSec}s";
+                    accountState.Error = "Rate limited";
                 }
             }
             catch (Exception ex)

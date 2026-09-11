@@ -189,6 +189,12 @@ public class ProviderAccountRuntimeState
             return isStale ? $"{line} (stale)" : line;
         }
 
+        if (IsBackingOff)
+        {
+            var remainingSec = Math.Max(0, (int)Math.Ceiling((RetryAfter!.Value - DateTimeOffset.UtcNow).TotalSeconds));
+            return $"{Error ?? "Rate limited"}, retrying in {remainingSec}s";
+        }
+
         return Error ?? "No usage data yet";
     }
 }
