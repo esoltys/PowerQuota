@@ -195,7 +195,7 @@ public class ProviderTests
         // No monthly_limit or utilization present, so UsedPercent falls back to 0.
         Assert.Equal(0f, snapshot.ExtraUsage.UsedPercent);
         Assert.NotNull(snapshot.ExtraUsage.Cost);
-        Assert.Equal(13814.0, snapshot.ExtraUsage.Cost!.Used);
+        Assert.Equal(138.14, snapshot.ExtraUsage.Cost!.Used);
         Assert.Null(snapshot.ExtraUsage.Cost.Limit);
         Assert.Equal("CAD", snapshot.ExtraUsage.Cost.Units);
     }
@@ -207,8 +207,8 @@ public class ProviderTests
         {
             "extra_usage": {
                 "is_enabled": true,
-                "used_credits": 25.50,
-                "monthly_limit": 100.0,
+                "used_credits": 2550.0,
+                "monthly_limit": 10000.0,
                 "currency": "USD",
                 "utilization": 30.5
             }
@@ -234,8 +234,8 @@ public class ProviderTests
         {
             "extra_usage": {
                 "is_enabled": true,
-                "used_credits": 25.0,
-                "monthly_limit": 100.0,
+                "used_credits": 2500.0,
+                "monthly_limit": 10000.0,
                 "currency": "USD"
             }
         }
@@ -251,6 +251,31 @@ public class ProviderTests
         Assert.Equal(25.0, snapshot.ExtraUsage.Cost!.Used);
         Assert.Equal(100.0, snapshot.ExtraUsage.Cost.Limit);
         Assert.Equal("USD", snapshot.ExtraUsage.Cost.Units);
+    }
+
+    [Fact]
+    public void ClaudeProvider_ParsesExtraUsageCentsToDollarsCorrectly()
+    {
+        var json = """
+        {
+            "extra_usage": {
+                "is_enabled": true,
+                "used_credits": 277.0,
+                "monthly_limit": 1000.0,
+                "currency": "CAD"
+            }
+        }
+        """;
+
+        var snapshot = ClaudeProvider.ParseUsage(json);
+
+        Assert.NotNull(snapshot.ExtraUsage);
+        Assert.True(snapshot.ExtraUsage!.IsActive);
+        Assert.Equal(27.7f, snapshot.ExtraUsage.UsedPercent, 1);
+        Assert.NotNull(snapshot.ExtraUsage.Cost);
+        Assert.Equal(2.77, snapshot.ExtraUsage.Cost!.Used);
+        Assert.Equal(10.0, snapshot.ExtraUsage.Cost.Limit);
+        Assert.Equal("CAD", snapshot.ExtraUsage.Cost.Units);
     }
 
     [Fact]

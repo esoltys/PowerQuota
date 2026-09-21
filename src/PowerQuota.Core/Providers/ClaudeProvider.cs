@@ -371,16 +371,17 @@ public class ClaudeProvider : IProviderAdapter
         {
             var isEnabled = eu.TryGetProperty("is_enabled", out var act) && act.ValueKind == JsonValueKind.True;
 
+            // Claude usage API returns used_credits and monthly_limit in minor currency units (cents).
             double usedCredits = 0;
-            if (eu.TryGetProperty("used_credits", out var uc) && uc.ValueKind == JsonValueKind.Number)
+            if (eu.TryGetProperty("used_credits", out var uc) && uc.ValueKind == JsonValueKind.Number && uc.TryGetDouble(out var ucVal))
             {
-                uc.TryGetDouble(out usedCredits);
+                usedCredits = ucVal / 100.0;
             }
 
             double? monthlyLimit = null;
             if (eu.TryGetProperty("monthly_limit", out var ml) && ml.ValueKind == JsonValueKind.Number && ml.TryGetDouble(out var limitVal))
             {
-                monthlyLimit = limitVal;
+                monthlyLimit = limitVal / 100.0;
             }
 
             string currency = eu.TryGetProperty("currency", out var curr) && curr.ValueKind == JsonValueKind.String
