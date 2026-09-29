@@ -314,6 +314,85 @@ public class QuotaRefreshService : IDisposable
         }
     }
 
+    private int _claudeLoginInFlight;
+
+    public bool IsClaudeLoginInProgress => Volatile.Read(ref _claudeLoginInFlight) != 0;
+
+    /// <summary>
+    /// Signs <paramref name="accountId"/> in with PowerQuota's own Claude OAuth session: opens the browser via
+    /// <paramref name="openBrowser"/>, stores the resulting tokens, then refreshes Claude quotas. Returns false
+    /// (without starting a second browser flow) when another login is already waiting for the browser.
+    /// </summary>
+    public async Task<bool> LoginClaudeAsync(string accountId, Action<Uri> openBrowser, CancellationToken ct = default)
+    {
+        if (Interlocked.CompareExchange(ref _claudeLoginInFlight, 1, 0) != 0) return false;
+
+        try
+        {
+            SetAccountStatus(accountId, AuthState.ActionRequired, "Waiting for Claude login in the browser…");
+
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token, ct);
+            ClaudeLoginResult result;
+            try
+            {
+                result = await ClaudeOAuth.LoginAsync(_httpClient, openBrowser, linkedCts.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_cts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                return false;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                SetAccountStatus(accountId, AuthState.ActionRequired, ex.Message);
+                return false;
+            }
+
+            _vault.SaveTokens(accountId, result.Tokens);
+            string? label = null;
+            _configStorage.Mutate(cfg =>
+            {
+                var account = cfg.Accounts.FirstOrDefault(a => a.Id == accountId);
+                if (account == null) return;
+                if (!string.IsNullOrEmpty(result.Email)) account.Email = result.Email;
+                // Replace generated labels (including older versions' borrowed "Claude Code (CLI)" session);
+                // keep any label the user chose.
+                if (string.IsNullOrEmpty(account.Label)
+                    || account.Label.Contains("(CLI)", StringComparison.Ordinal)
+                    || account.Label == $"{ProviderId.Claude.GetLabel()} Quota")
+                {
+                    account.Label = result.Email ?? ProviderId.Claude.GetLabel();
+                }
+                account.UpdatedAt = DateTimeOffset.UtcNow;
+                label = account.Label;
+            });
+
+            lock (_stateLock)
+            {
+                var accountState = State.ProviderAccounts.FirstOrDefault(a => a.AccountId == accountId);
+                if (accountState != null && label != null) accountState.Label = label;
+            }
+
+            await RefreshProviderAsync(ProviderId.Claude, ct).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            Volatile.Write(ref _claudeLoginInFlight, 0);
+        }
+    }
+
+    private void SetAccountStatus(string accountId, AuthState authState, string message)
+    {
+        lock (_stateLock)
+        {
+            var accountState = State.ProviderAccounts.FirstOrDefault(a => a.AccountId == accountId);
+            if (accountState == null) return;
+            accountState.AuthState = authState;
+            accountState.Error = message;
+        }
+        NotifyStateChanged();
+    }
+
     private async Task RefreshProviderInternalAsync(ProviderId provider, CancellationToken ct = default)
     {
         if (!_adapters.TryGetValue(provider, out var adapter)) return;
@@ -463,10 +542,6 @@ public class QuotaRefreshService : IDisposable
                 case ProviderId.Codex:
                     if (!string.IsNullOrEmpty(HostCliScanner.GetCodexActiveToken()))
                         return new AccountConfig { Provider = ProviderId.Codex, Label = "Codex (CLI)" };
-                    break;
-                case ProviderId.Claude:
-                    if (!string.IsNullOrEmpty(HostCliScanner.GetClaudeActiveToken()))
-                        return new AccountConfig { Provider = ProviderId.Claude, Label = "Claude Code (CLI)" };
                     break;
                 case ProviderId.Cursor:
                     var (at, _) = HostCliScanner.ScanCursorIdeTokens();

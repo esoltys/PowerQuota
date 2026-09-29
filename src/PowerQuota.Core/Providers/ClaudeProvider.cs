@@ -1,5 +1,4 @@
 using System.Net.Http.Headers;
-using System.Net.Http.Json;
 using System.Text.Json;
 using PowerQuota.Core.Models;
 using PowerQuota.Core.Storage;
@@ -9,88 +8,29 @@ namespace PowerQuota.Core.Providers;
 public class ClaudeProvider : IProviderAdapter
 {
     private const string UsageEndpoint = "https://api.anthropic.com/api/oauth/usage";
-    private const string TokenEndpoint = "https://console.anthropic.com/v1/oauth/token";
-    private const string ClientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
-
     public ProviderId Id => ProviderId.Claude;
 
+    /// <summary>
+    /// Fetches usage with PowerQuota's own OAuth session (see <see cref="ClaudeOAuth"/>). Tokens without a
+    /// refresh token are legacy copies of the Claude Code CLI session from older versions; they are discarded
+    /// so the account asks for a PowerQuota login rather than borrowing another app's credentials.
+    /// </summary>
     public async Task<UsageSnapshot> FetchAsync(AccountConfig account, WindowsCredentialVault vault, HttpClient client, CancellationToken ct = default)
     {
-        var tokens = vault.GetTokens(account.Id) ?? new StoredTokens();
-        var (scannedAt, _, scannedExp) = HostCliScanner.ScanClaudeTokens();
-
-        if (string.IsNullOrEmpty(tokens.AccessToken))
+        var tokens = vault.GetTokens(account.Id);
+        if (tokens == null || string.IsNullOrEmpty(tokens.AccessToken) || string.IsNullOrEmpty(tokens.RefreshToken))
         {
-            if (!string.IsNullOrEmpty(scannedAt))
-            {
-                tokens.AccessToken = scannedAt;
-                tokens.RefreshToken = null;
-                tokens.ExpiresAt = scannedExp;
-                vault.SaveTokens(account.Id, tokens);
-            }
-            else if (TryBuildDesktopCacheSnapshot(account) is { } desktopSnapshot)
-            {
-                return desktopSnapshot;
-            }
-            else
-            {
-                throw new InvalidOperationException("Claude login required");
-            }
-        }
-        else if (!string.IsNullOrEmpty(scannedAt))
-        {
-            // For accounts tracking host CLI credentials, always sync with on-disk state.
-            // If the account has no custom refresh token, or if its cached token matches the host CLI token,
-            // treat it as a host CLI account: update to newer on-disk tokens and purge any legacy refresh token
-            // from vault to avoid invalidating the CLI session.
-            bool isHostCliAccount = string.IsNullOrEmpty(tokens.RefreshToken) || tokens.AccessToken == scannedAt;
-            if (isHostCliAccount)
-            {
-                bool modified = false;
-                if (scannedAt != tokens.AccessToken)
-                {
-                    tokens.AccessToken = scannedAt;
-                    tokens.ExpiresAt = scannedExp ?? tokens.ExpiresAt;
-                    modified = true;
-                }
-
-                if (!string.IsNullOrEmpty(tokens.RefreshToken))
-                {
-                    tokens.RefreshToken = null;
-                    modified = true;
-                }
-
-                if (modified)
-                {
-                    vault.SaveTokens(account.Id, tokens);
-                }
-            }
+            if (tokens != null) vault.RemoveTokens(account.Id);
+            throw new UnauthorizedAccessException("Claude login required");
         }
 
-        // Proactive token check: if the token is expired or about to expire in < 2 minutes
+        // Proactive refresh: the token is expired or about to expire in < 2 minutes
         if (tokens.ExpiresAt.HasValue && tokens.ExpiresAt.Value <= DateTimeOffset.UtcNow.AddMinutes(2))
         {
-            if (string.IsNullOrEmpty(tokens.RefreshToken))
-            {
-                // Host CLI account: check if the CLI has rotated the token on disk
-                var (freshAt, _, freshExp) = HostCliScanner.ScanClaudeTokens();
-                if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
-                {
-                    tokens.AccessToken = freshAt;
-                    tokens.RefreshToken = null;
-                    tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
-                    vault.SaveTokens(account.Id, tokens);
-                }
-            }
-            else
-            {
-                // Manually configured account with a refresh token
-                var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
-                if (refreshed != null)
-                {
-                    tokens = refreshed;
-                }
-            }
+            var refreshed = await ClaudeOAuth.RefreshAsync(client, tokens, ct)
+                ?? throw new UnauthorizedAccessException("Claude session expired — log in again");
+            tokens = refreshed;
+            vault.SaveTokens(account.Id, tokens);
         }
 
         async Task<(System.Net.HttpStatusCode StatusCode, string? Json)> SendUsageRequestAsync(string accessToken)
@@ -110,187 +50,32 @@ public class ClaudeProvider : IProviderAdapter
             return (response.StatusCode, json);
         }
 
-        System.Net.HttpStatusCode statusCode;
-        string? usageJson;
-        try
-        {
-            (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
-        }
-        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-        {
-            if (TryBuildDesktopCacheSnapshot(account) is { } rateLimitedSnapshot)
-            {
-                return rateLimitedSnapshot;
-            }
-
-            throw;
-        }
+        // 429 propagates as HttpRequestException; the refresh engine applies backoff.
+        var (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
 
         // Reactive refresh on 401 Unauthorized
         if (statusCode == System.Net.HttpStatusCode.Unauthorized)
         {
-            if (string.IsNullOrEmpty(tokens.RefreshToken))
+            var refreshed = await ClaudeOAuth.RefreshAsync(client, tokens, ct);
+            if (refreshed != null)
             {
-                // Host CLI account: re-read disk to check if Claude Code CLI rotated credentials
-                var (freshAt, _, freshExp) = HostCliScanner.ScanClaudeTokens();
-                if (!string.IsNullOrEmpty(freshAt) && freshAt != tokens.AccessToken)
-                {
-                    tokens.AccessToken = freshAt;
-                    tokens.RefreshToken = null;
-                    tokens.ExpiresAt = freshExp ?? tokens.ExpiresAt;
-                    vault.SaveTokens(account.Id, tokens);
-                    (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
-                }
-            }
-            else
-            {
-                // Manually configured account: refresh via OAuth refresh token
-                var refreshed = await RefreshTokenAsync(account.Id, tokens, vault, client, ct);
-                if (refreshed != null)
-                {
-                    tokens = refreshed;
-                    (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
-                }
+                tokens = refreshed;
+                vault.SaveTokens(account.Id, tokens);
+                (statusCode, usageJson) = await SendUsageRequestAsync(tokens.AccessToken);
             }
         }
 
-        if (statusCode == System.Net.HttpStatusCode.Unauthorized || statusCode == System.Net.HttpStatusCode.Forbidden || usageJson == null)
+        if (usageJson == null)
         {
-            if (TryBuildDesktopCacheSnapshot(account) is { } desktopSnapshot)
-            {
-                return desktopSnapshot;
-            }
-
-            throw new UnauthorizedAccessException("Claude session expired");
+            throw new UnauthorizedAccessException("Claude session expired — log in again");
         }
 
         return ParseUsage(usageJson, account);
     }
 
-    /// <summary>
-    /// Last-resort fallback when no CLI session and no usable OAuth token are available: reads the usage
-    /// samples Claude Desktop already writes to disk during normal use (see HostCliScanner.ScanClaudeDesktopUsageHistory).
-    /// No token, request, or login is involved, so the numbers are only as fresh as Desktop's last write and
-    /// carry no reset timestamps or per-model breakdown — the caller should still prompt for a real login
-    /// when possible, which is why every window here carries a ResetDescription note saying so.
-    /// </summary>
-    private static UsageSnapshot? TryBuildDesktopCacheSnapshot(AccountConfig account)
-    {
-        var (fh, sd, sampledAt) = HostCliScanner.ScanClaudeDesktopUsageHistory();
-
-        // A sample older than its own window's duration is guaranteed to have reset since it was
-        // taken, so showing it as "current" would be actively misleading rather than just stale.
-        var age = sampledAt.HasValue ? DateTimeOffset.UtcNow - sampledAt.Value : (TimeSpan?)null;
-        if (age is { } fhAge && fhAge >= TimeSpan.FromHours(5)) fh = null;
-        if (age is { } sdAge && sdAge >= TimeSpan.FromDays(7)) sd = null;
-
-        if (fh is null && sd is null) return null;
-
-        string loginNote = age is { } ageVal
-            ? $"From Claude Desktop cache, updated {FormatAge(ageVal)} — log in for live data & reset times"
-            : "From Claude Desktop cache — log in for live data & reset times";
-        var windows = new List<UsageWindow>();
-
-        if (fh is { } fhVal)
-        {
-            windows.Add(new UsageWindow
-            {
-                Label = "Session",
-                UsedPercent = fhVal,
-                WindowSeconds = 5 * 3600,
-                ResetDescription = loginNote
-            });
-        }
-
-        if (sd is { } sdVal)
-        {
-            windows.Add(new UsageWindow
-            {
-                Label = "Weekly",
-                UsedPercent = sdVal,
-                WindowSeconds = 7 * 24 * 3600,
-                ResetDescription = loginNote
-            });
-        }
-
-        return new UsageSnapshot
-        {
-            Provider = ProviderId.Claude,
-            Source = "Claude Desktop cache",
-            UpdatedAt = sampledAt ?? DateTimeOffset.UtcNow,
-            HeadlineIndex = 0,
-            Windows = windows,
-            Identity = new ProviderIdentity
-            {
-                Email = account.Email,
-                Plan = "Claude Code"
-            }
-        };
-    }
-
-    private static string FormatAge(TimeSpan age)
-    {
-        if (age.TotalMinutes < 1) return "just now";
-        if (age.TotalHours < 1) return $"{(int)age.TotalMinutes}m ago";
-        if (age.TotalDays < 1) return $"{(int)age.TotalHours}h {age.Minutes}m ago";
-        return $"{(int)age.TotalDays}d ago";
-    }
-
-    private async Task<StoredTokens?> RefreshTokenAsync(string accountId, StoredTokens tokens, WindowsCredentialVault vault, HttpClient client, CancellationToken ct)
-    {
-        if (string.IsNullOrEmpty(tokens.RefreshToken)) return null;
-
-        try
-        {
-            using var request = new HttpRequestMessage(HttpMethod.Post, TokenEndpoint)
-            {
-                Content = JsonContent.Create(new
-                {
-                    grant_type = "refresh_token",
-                    refresh_token = tokens.RefreshToken,
-                    client_id = ClientId
-                })
-            };
-
-            using var response = await client.SendAsync(request, ct);
-            if (!response.IsSuccessStatusCode) return null;
-
-            var json = await response.Content.ReadAsStringAsync(ct);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            if (root.TryGetProperty("access_token", out var atProp) && atProp.GetString() is { } newAt && !string.IsNullOrEmpty(newAt))
-            {
-                tokens.AccessToken = newAt;
-                if (root.TryGetProperty("refresh_token", out var rtProp) && rtProp.GetString() is { } newRt && !string.IsNullOrEmpty(newRt))
-                {
-                    tokens.RefreshToken = newRt;
-                }
-                if (root.TryGetProperty("expires_in", out var expIn) && expIn.ValueKind == JsonValueKind.Number && expIn.TryGetInt64(out var expInSec) && expInSec > 0)
-                {
-                    tokens.ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expInSec);
-                }
-
-                vault.SaveTokens(accountId, tokens);
-                return tokens;
-            }
-        }
-        catch
-        {
-            // Allow caller to fall back to the failure already observed
-        }
-
-        return null;
-    }
-
+    // PowerQuota's Claude session is independent of the Claude Code CLI, so no account is "CLI active".
     public Task<string?> GetSystemActiveAccountIdAsync(IReadOnlyList<AccountConfig> accounts, WindowsCredentialVault vault)
-    {
-        var hostToken = HostCliScanner.GetClaudeActiveToken();
-        if (string.IsNullOrEmpty(hostToken)) return Task.FromResult<string?>(null);
-
-        var match = accounts.FirstOrDefault(a => a.Provider == ProviderId.Claude && vault.GetTokens(a.Id)?.AccessToken == hostToken);
-        return Task.FromResult(match?.Id);
-    }
+        => Task.FromResult<string?>(null);
 
     public static UsageSnapshot ParseUsage(string json, AccountConfig? account = null)
     {
