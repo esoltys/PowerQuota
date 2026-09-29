@@ -52,6 +52,14 @@ public class WindowsCredentialVault
         }
     }
 
+    public void RemoveTokens(string accountId)
+    {
+        lock (_lock)
+        {
+            if (_tokens.Remove(accountId)) Persist();
+        }
+    }
+
     public void SaveApiKey(string accountId, string apiKey)
     {
         lock (_lock)

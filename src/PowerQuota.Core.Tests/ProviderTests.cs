@@ -1042,27 +1042,6 @@ public class ProviderTests
         Assert.Equal(50.0f, snapshot.Windows[1].UsedPercent);
     }
 
-    /// <summary>
-    /// Claude Desktop's usage cache is now a fallback source for ClaudeProvider (see HostCliScanner.
-    /// ScanClaudeDesktopUsageHistory). Tests that assert a hard failure (no fallback available) must run
-    /// with that file out of the way, since a real Claude Desktop install on the dev/CI machine would
-    /// otherwise let the fallback succeed and mask the behavior under test.
-    /// </summary>
-    private static async Task WithDesktopCacheSuppressedAsync(Func<Task> test)
-    {
-        var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude", "plan-usage-history.json");
-        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
-        try
-        {
-            if (originalContent != null) File.Delete(path);
-            await test();
-        }
-        finally
-        {
-            if (originalContent != null) File.WriteAllText(path, originalContent);
-        }
-    }
-
     private class TrackingContent : StringContent
     {
         public bool IsDisposed { get; private set; }
@@ -1102,46 +1081,56 @@ public class ProviderTests
         }
     }
 
+    private static WindowsCredentialVault CreateTempVault()
+    {
+        return new WindowsCredentialVault(Path.Combine(Path.GetTempPath(), "PowerQuotaTests", Guid.NewGuid().ToString("N")));
+    }
+
+    private static StoredTokens CreateClaudeSession(string accessToken = "pq-access-token", DateTimeOffset? expiresAt = null)
+    {
+        return new StoredTokens
+        {
+            AccessToken = accessToken,
+            RefreshToken = "pq-refresh-token",
+            ExpiresAt = expiresAt ?? DateTimeOffset.UtcNow.AddHours(1)
+        };
+    }
+
     [Fact]
     public async Task ClaudeProvider_FetchAsync_DisposesRequestAndResponse_OnSuccessAndError()
     {
-        await WithDesktopCacheSuppressedAsync(async () =>
+        var vault = CreateTempVault();
+        var account = new AccountConfig { Id = "test-claude", Provider = ProviderId.Claude };
+        vault.SaveTokens(account.Id, CreateClaudeSession());
+
+        // 1. Success
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
         {
-            var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude", Provider = ProviderId.Claude };
-            var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-            var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "test-token";
-            vault.SaveTokens(account.Id, new StoredTokens { AccessToken = initialToken });
-
-            // 1. Success
-            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            {
-                Content = new TrackingContent("""{"five_hour":{"utilization":10.0}}""")
-            });
-            using var client = new HttpClient(handler);
-            var provider = new ClaudeProvider();
-
-            var snapshot = await provider.FetchAsync(account, vault, client);
-            Assert.NotNull(snapshot);
-            Assert.Single(handler.ReturnedContents);
-            Assert.True(handler.ReturnedContents[0].IsDisposed);
-
-            // 2. 401 Unauthorized
-            var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
-            {
-                Content = new TrackingContent("Unauthorized")
-            });
-            using var unauthClient = new HttpClient(unauthHandler);
-            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
-            Assert.Single(unauthHandler.ReturnedContents);
-            Assert.True(unauthHandler.ReturnedContents[0].IsDisposed);
+            Content = new TrackingContent("""{"five_hour":{"utilization":10.0}}""")
         });
+        using var client = new HttpClient(handler);
+        var provider = new ClaudeProvider();
+
+        var snapshot = await provider.FetchAsync(account, vault, client);
+        Assert.NotNull(snapshot);
+        Assert.Single(handler.ReturnedContents);
+        Assert.True(handler.ReturnedContents[0].IsDisposed);
+
+        // 2. 401 Unauthorized on usage and on the refresh attempt
+        var unauthHandler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
+        {
+            Content = new TrackingContent("Unauthorized")
+        });
+        using var unauthClient = new HttpClient(unauthHandler);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, unauthClient));
+        Assert.Equal(2, unauthHandler.ReturnedContents.Count); // usage (401), token refresh (401)
+        Assert.All(unauthHandler.ReturnedContents, c => Assert.True(c.IsDisposed));
     }
 
     [Fact]
     public async Task ClaudeProvider_FetchAsync_RefreshesViaOAuth_WhenCachedTokenIs401()
     {
-        var vault = new WindowsCredentialVault();
+        var vault = CreateTempVault();
         var account = new AccountConfig { Id = "test-claude-refresh", Provider = ProviderId.Claude };
 
         vault.SaveTokens(account.Id, new StoredTokens
@@ -1182,327 +1171,256 @@ public class ProviderTests
         Assert.Equal(3, handler.ReturnedContents.Count); // 1st usage (401), token refresh (200), 2nd usage (200)
         Assert.All(handler.ReturnedContents, c => Assert.True(c.IsDisposed));
         Assert.Equal("new-claude-access-token", vault.GetTokens(account.Id)?.AccessToken);
+        Assert.Equal("new-refresh-token", vault.GetTokens(account.Id)?.RefreshToken);
     }
 
     [Fact]
-    public async Task ClaudeProvider_FetchAsync_HostCliAccount_DoesNotCallOAuthRefresh_WhenTokenIs401()
+    public async Task ClaudeProvider_FetchAsync_ThrowsLoginRequired_WhenNoTokens()
     {
-        await WithDesktopCacheSuppressedAsync(async () =>
+        var vault = CreateTempVault();
+        var account = new AccountConfig { Id = "test-claude-no-tokens", Provider = ProviderId.Claude };
+        var handler = new MockHttpMessageHandler(req => throw new InvalidOperationException("No request expected"));
+        using var client = new HttpClient(handler);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new ClaudeProvider().FetchAsync(account, vault, client));
+        Assert.Empty(handler.ReceivedRequests);
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_DiscardsLegacyCliTokenWithoutRefreshToken()
+    {
+        var vault = CreateTempVault();
+        var account = new AccountConfig { Id = "test-claude-legacy", Provider = ProviderId.Claude };
+        // Older versions copied the Claude Code CLI access token into the vault without a refresh token.
+        vault.SaveTokens(account.Id, new StoredTokens { AccessToken = "borrowed-cli-token", ExpiresAt = DateTimeOffset.UtcNow.AddHours(1) });
+
+        var handler = new MockHttpMessageHandler(req => throw new InvalidOperationException("No request expected"));
+        using var client = new HttpClient(handler);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new ClaudeProvider().FetchAsync(account, vault, client));
+        Assert.Empty(handler.ReceivedRequests);
+        Assert.Null(vault.GetTokens(account.Id));
+        Assert.Null(new WindowsCredentialVault(vault.StorageDirectory).GetTokens(account.Id));
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_ProactivelyRefreshesAndSavesRotatedTokens()
+    {
+        var vault = CreateTempVault();
+        var account = new AccountConfig { Id = "test-claude-proactive", Provider = ProviderId.Claude };
+        vault.SaveTokens(account.Id, CreateClaudeSession("old-access-token", DateTimeOffset.UtcNow.AddSeconds(30)));
+
+        string? usageAuthorization = null;
+        string? refreshBody = null;
+        var handler = new MockHttpMessageHandler(req =>
         {
-            var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude-cli-401", Provider = ProviderId.Claude };
-            var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-            var initialToken = !string.IsNullOrEmpty(scannedAt) ? scannedAt : "host-token";
-
-            vault.SaveTokens(account.Id, new StoredTokens
+            if (req.RequestUri!.ToString().Contains("oauth/token"))
             {
-                AccessToken = initialToken,
-                RefreshToken = null, // Host CLI accounts do not retain refresh tokens
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-            });
-
-            bool oauthTokenEndpointCalled = false;
-            var handler = new MockHttpMessageHandler(req =>
-            {
-                if (req.RequestUri!.ToString().Contains("oauth/token"))
+                refreshBody = req.Content!.ReadAsStringAsync().Result;
+                return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
-                    oauthTokenEndpointCalled = true;
-                    return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                    {
-                        Content = new TrackingContent("""{"access_token":"unexpected-token"}""")
-                    };
-                }
-                return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
-                {
-                    Content = new TrackingContent("Unauthorized")
+                    Content = new TrackingContent("""{"access_token":"rotated-access","refresh_token":"rotated-refresh","expires_in":28800}""")
                 };
-            });
-            using var client = new HttpClient(handler);
-            var provider = new ClaudeProvider();
-
-            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
-            Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called for host CLI accounts");
-        });
-    }
-
-    [Fact]
-    public async Task ClaudeProvider_FetchAsync_HostCliAccount_PurgesLegacyRefreshToken_FromVault()
-    {
-        await WithDesktopCacheSuppressedAsync(async () =>
-        {
-            var credDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
-            var credFile = Path.Combine(credDir, ".credentials.json");
-            bool createdCredFile = false;
-            string? originalContent = null;
-
-            if (File.Exists(credFile))
-            {
-                originalContent = File.ReadAllText(credFile);
             }
-
-            try
+            usageAuthorization = req.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
-                Directory.CreateDirectory(credDir);
-                File.WriteAllText(credFile, """{"claudeAiOauth":{"accessToken":"test-claude-host-token","expiresAt":2000000000000}}""");
-                if (originalContent == null)
-                {
-                    createdCredFile = true;
-                }
-
-                var vault = new WindowsCredentialVault();
-                var account = new AccountConfig { Id = "test-claude-legacy-vault", Provider = ProviderId.Claude };
-                var (scannedAt, _, _) = HostCliScanner.ScanClaudeTokens();
-                Assert.Equal("test-claude-host-token", scannedAt);
-
-                // Pre-populate vault with a legacy refresh token (simulating pre-fix behavior)
-                vault.SaveTokens(account.Id, new StoredTokens
-                {
-                    AccessToken = scannedAt!,
-                    RefreshToken = "legacy-cli-refresh-token",
-                    ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-                });
-
-                bool oauthTokenEndpointCalled = false;
-                var handler = new MockHttpMessageHandler(req =>
-                {
-                    if (req.RequestUri!.ToString().Contains("oauth/token"))
-                    {
-                        oauthTokenEndpointCalled = true;
-                        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-                        {
-                            Content = new TrackingContent("""{"access_token":"unexpected-token"}""")
-                        };
-                    }
-                    return new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
-                    {
-                        Content = new TrackingContent("Unauthorized")
-                    };
-                });
-                using var client = new HttpClient(handler);
-                var provider = new ClaudeProvider();
-
-                await Assert.ThrowsAsync<UnauthorizedAccessException>(() => provider.FetchAsync(account, vault, client));
-
-                // Verify that the legacy refresh token was purged from vault and oauth token endpoint was not called
-                Assert.False(oauthTokenEndpointCalled, "OAuth refresh endpoint must not be called when legacy CLI refresh token was purged");
-                var updatedTokens = vault.GetTokens(account.Id);
-                Assert.NotNull(updatedTokens);
-                Assert.Null(updatedTokens.RefreshToken);
-            }
-            finally
-            {
-                if (createdCredFile)
-                {
-                    try { File.Delete(credFile); } catch { }
-                }
-                else if (originalContent != null)
-                {
-                    try { File.WriteAllText(credFile, originalContent); } catch { }
-                }
-            }
+                Content = new TrackingContent("""{"five_hour":{"utilization":5.0}}""")
+            };
         });
+        using var client = new HttpClient(handler);
+
+        await new ClaudeProvider().FetchAsync(account, vault, client);
+
+        Assert.Equal("Bearer rotated-access", usageAuthorization);
+        Assert.Contains("\"grant_type\":\"refresh_token\"", refreshBody);
+        Assert.Contains("\"refresh_token\":\"pq-refresh-token\"", refreshBody);
+        Assert.Contains($"\"client_id\":\"{ClaudeOAuth.ClientId}\"", refreshBody);
+
+        var saved = new WindowsCredentialVault(vault.StorageDirectory).GetTokens(account.Id);
+        Assert.Equal("rotated-access", saved?.AccessToken);
+        Assert.Equal("rotated-refresh", saved?.RefreshToken);
+        Assert.True(saved?.ExpiresAt > DateTimeOffset.UtcNow.AddHours(7));
     }
 
     [Fact]
-    public void HostCliScanner_ScanClaudeDesktopUsageHistory_ReturnsLatestSampleByTimestamp()
+    public async Task ClaudeProvider_FetchAsync_ThrowsLoginRequired_WhenRefreshTokenRevoked()
     {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
-        var path = Path.Combine(dir, "plan-usage-history.json");
-        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
+        var vault = CreateTempVault();
+        var account = new AccountConfig { Id = "test-claude-revoked", Provider = ProviderId.Claude };
+        vault.SaveTokens(account.Id, CreateClaudeSession(expiresAt: DateTimeOffset.UtcNow.AddMinutes(-1)));
 
-        try
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
         {
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(path, """
-            {"version":1,"samples":[
-                {"t":1000,"org":"org-a","u":{"fh":10,"sd":20}},
-                {"t":3000,"org":"org-a","u":{"fh":30,"sd":40}},
-                {"t":2000,"org":"org-a","u":{"fh":99,"sd":99}}
-            ]}
-            """);
-
-            var (fh, sd, sampledAt) = HostCliScanner.ScanClaudeDesktopUsageHistory();
-
-            // Must pick the entry with the highest "t", not the last one in array order.
-            Assert.Equal(30f, fh);
-            Assert.Equal(40f, sd);
-            Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(3000), sampledAt);
-        }
-        finally
-        {
-            if (originalContent != null) File.WriteAllText(path, originalContent);
-            else if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public async Task ClaudeProvider_FetchAsync_FallsBackToDesktopCache_WhenSessionExpiredAndNoRefreshTokenAvailable()
-    {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
-        var path = Path.Combine(dir, "plan-usage-history.json");
-        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
-
-        try
-        {
-            Directory.CreateDirectory(dir);
-            var recentT = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
-            File.WriteAllText(path, """{"version":1,"samples":[{"t":RECENT_T,"org":"org-a","u":{"fh":42,"sd":77}}]}""".Replace("RECENT_T", recentT.ToString()));
-
-            var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude-desktop-fallback-expired", Provider = ProviderId.Claude };
-            vault.SaveTokens(account.Id, new StoredTokens
-            {
-                AccessToken = "stale-token-not-matching-any-real-session",
-                RefreshToken = null, // no manual refresh token and (for this test) no live CLI session either
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-            });
-
-            // Every usage request comes back 401; the provider must fall back to the desktop cache
-            // instead of throwing, and must never need the oauth/token endpoint to do so.
-            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized)
-            {
-                Content = new TrackingContent("Unauthorized")
-            });
-            using var client = new HttpClient(handler);
-            var provider = new ClaudeProvider();
-
-            var snapshot = await provider.FetchAsync(account, vault, client);
-
-            Assert.Equal("Claude Desktop cache", snapshot.Source);
-            Assert.Equal(2, snapshot.Windows.Count);
-            Assert.Contains(snapshot.Windows, w => w.Label == "Session" && Math.Abs(w.UsedPercent - 42f) < 0.01f);
-            Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 77f) < 0.01f);
-            Assert.All(snapshot.Windows, w => Assert.Contains("From Claude Desktop cache, updated", w.ResetDescription));
-            Assert.All(snapshot.Windows, w => Assert.Contains("log in for live data & reset times", w.ResetDescription));
-        }
-        finally
-        {
-            if (originalContent != null) File.WriteAllText(path, originalContent);
-            else if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public async Task ClaudeProvider_FetchAsync_FallsBackToDesktopCache_WhenRateLimited()
-    {
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
-        var path = Path.Combine(dir, "plan-usage-history.json");
-        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
-
-        try
-        {
-            Directory.CreateDirectory(dir);
-            var recentT = DateTimeOffset.UtcNow.AddMinutes(-5).ToUnixTimeMilliseconds();
-            File.WriteAllText(path, """{"version":1,"samples":[{"t":RECENT_T,"org":"org-a","u":{"fh":15,"sd":25}}]}""".Replace("RECENT_T", recentT.ToString()));
-
-            var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude-desktop-fallback-ratelimited", Provider = ProviderId.Claude };
-            vault.SaveTokens(account.Id, new StoredTokens
-            {
-                AccessToken = "some-token",
-                RefreshToken = null,
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-            });
-
-            // A 429 must fall back to the desktop cache too, not just 401/403 — previously it propagated
-            // straight past the fallback as an unhandled HttpRequestException.
-            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
-            {
-                Content = new TrackingContent("Too Many Requests")
-            });
-            using var client = new HttpClient(handler);
-            var provider = new ClaudeProvider();
-
-            var snapshot = await provider.FetchAsync(account, vault, client);
-
-            Assert.Equal("Claude Desktop cache", snapshot.Source);
-            Assert.Contains(snapshot.Windows, w => w.Label == "Session" && Math.Abs(w.UsedPercent - 15f) < 0.01f);
-            Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 25f) < 0.01f);
-
-            // The cache can be significantly behind live usage (Claude Desktop only syncs on its own
-            // schedule) so the age of the sample must be surfaced, not just a generic "log in" note.
-            Assert.All(snapshot.Windows, w => Assert.Contains("updated", w.ResetDescription));
-            Assert.All(snapshot.Windows, w => Assert.Contains("ago", w.ResetDescription));
-        }
-        finally
-        {
-            if (originalContent != null) File.WriteAllText(path, originalContent);
-            else if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public async Task ClaudeProvider_FetchAsync_RejectsDesktopCache_WhenSampleOlderThanItsOwnWindow()
-    {
-        // A "5-hour session" sample older than 5 hours has definitely already reset — showing it as
-        // current would be misleading rather than just stale, so the fallback must reject it outright
-        // (falling through to the normal error) instead of displaying stale numbers as if live.
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
-        var path = Path.Combine(dir, "plan-usage-history.json");
-        string? originalContent = File.Exists(path) ? File.ReadAllText(path) : null;
-
-        try
-        {
-            Directory.CreateDirectory(dir);
-            var staleT = DateTimeOffset.UtcNow.AddHours(-6).ToUnixTimeMilliseconds();
-            File.WriteAllText(path, """{"version":1,"samples":[{"t":STALE_T,"org":"org-a","u":{"fh":15,"sd":25}}]}""".Replace("STALE_T", staleT.ToString()));
-
-            var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude-desktop-fallback-toostale", Provider = ProviderId.Claude };
-            vault.SaveTokens(account.Id, new StoredTokens
-            {
-                AccessToken = "some-token",
-                RefreshToken = null,
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-            });
-
-            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
-            {
-                Content = new TrackingContent("Too Many Requests")
-            });
-            using var client = new HttpClient(handler);
-            var provider = new ClaudeProvider();
-
-            // The 5-hour "Session" figure is too stale to use, but the 7-day "Weekly" figure from the
-            // same sample is still within its own window, so the fallback should still succeed with
-            // just that window rather than being an all-or-nothing decision.
-            var snapshot = await provider.FetchAsync(account, vault, client);
-
-            Assert.Equal("Claude Desktop cache", snapshot.Source);
-            Assert.DoesNotContain(snapshot.Windows, w => w.Label == "Session");
-            Assert.Contains(snapshot.Windows, w => w.Label == "Weekly" && Math.Abs(w.UsedPercent - 25f) < 0.01f);
-        }
-        finally
-        {
-            if (originalContent != null) File.WriteAllText(path, originalContent);
-            else if (File.Exists(path)) File.Delete(path);
-        }
-    }
-
-    [Fact]
-    public async Task ClaudeProvider_FetchAsync_ThrowsRateLimited_WhenNoDesktopCacheAvailable()
-    {
-        await WithDesktopCacheSuppressedAsync(async () =>
-        {
-            var vault = new WindowsCredentialVault();
-            var account = new AccountConfig { Id = "test-claude-ratelimited-no-cache", Provider = ProviderId.Claude };
-            vault.SaveTokens(account.Id, new StoredTokens
-            {
-                AccessToken = "some-token",
-                RefreshToken = null,
-                ExpiresAt = DateTimeOffset.UtcNow.AddHours(1)
-            });
-
-            var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
-            {
-                Content = new TrackingContent("Too Many Requests")
-            });
-            using var client = new HttpClient(handler);
-            var provider = new ClaudeProvider();
-
-            var ex = await Assert.ThrowsAsync<HttpRequestException>(() => provider.FetchAsync(account, vault, client));
-            Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, ex.StatusCode);
+            Content = new TrackingContent("""{"error":"invalid_grant"}""")
         });
+        using var client = new HttpClient(handler);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => new ClaudeProvider().FetchAsync(account, vault, client));
+        Assert.All(handler.ReceivedRequests, r => Assert.Contains("oauth/token", r.RequestUri!.ToString()));
+    }
+
+    [Fact]
+    public async Task ClaudeProvider_FetchAsync_PropagatesRateLimit()
+    {
+        var vault = CreateTempVault();
+        var account = new AccountConfig { Id = "test-claude-ratelimited", Provider = ProviderId.Claude };
+        vault.SaveTokens(account.Id, CreateClaudeSession());
+
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.TooManyRequests)
+        {
+            Content = new TrackingContent("Too Many Requests")
+        });
+        using var client = new HttpClient(handler);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => new ClaudeProvider().FetchAsync(account, vault, client));
+        Assert.Equal(System.Net.HttpStatusCode.TooManyRequests, ex.StatusCode);
+    }
+
+    [Fact]
+    public async Task ClaudeOAuth_RefreshAsync_FallsBackToLegacyTokenEndpoint_WhenPrimaryNotFound()
+    {
+        var handler = new MockHttpMessageHandler(req => req.RequestUri!.ToString() == ClaudeOAuth.TokenEndpoints[0]
+            ? new HttpResponseMessage(System.Net.HttpStatusCode.NotFound) { Content = new TrackingContent("") }
+            : new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new TrackingContent("""{"access_token":"from-legacy-host"}""") });
+        using var client = new HttpClient(handler);
+
+        var refreshed = await ClaudeOAuth.RefreshAsync(client, CreateClaudeSession());
+
+        Assert.Equal("from-legacy-host", refreshed?.AccessToken);
+        Assert.Equal("pq-refresh-token", refreshed?.RefreshToken); // not rotated, so the old one is kept
+        Assert.Equal(new[] { ClaudeOAuth.TokenEndpoints[0], ClaudeOAuth.TokenEndpoints[1] },
+            handler.ReceivedRequests.Select(r => r.RequestUri!.ToString()));
+    }
+
+    [Fact]
+    public async Task ClaudeOAuth_RefreshAsync_ThrowsOnServerError()
+    {
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.ServiceUnavailable)
+        {
+            Content = new TrackingContent("")
+        });
+        using var client = new HttpClient(handler);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => ClaudeOAuth.RefreshAsync(client, CreateClaudeSession()));
+    }
+
+    [Fact]
+    public void ClaudeOAuth_BuildAuthorizeUrl_IncludesPkceChallengeStateAndRedirect()
+    {
+        var challenge = ClaudeOAuth.CreateCodeChallenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
+        // RFC 7636 appendix B test vector.
+        Assert.Equal("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", challenge);
+
+        var url = ClaudeOAuth.BuildAuthorizeUrl(challenge, "state-123", "http://localhost:54321/callback").AbsoluteUri;
+
+        Assert.StartsWith("https://claude.ai/oauth/authorize?", url);
+        Assert.Contains($"client_id={ClaudeOAuth.ClientId}", url);
+        Assert.Contains("response_type=code", url);
+        Assert.Contains("code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", url);
+        Assert.Contains("code_challenge_method=S256", url);
+        Assert.Contains("state=state-123", url);
+        Assert.Contains("redirect_uri=http%3A%2F%2Flocalhost%3A54321%2Fcallback", url);
+        Assert.Contains("scope=user%3Aprofile%20user%3Ainference", url);
+    }
+
+    [Theory]
+    [InlineData("GET /callback?code=abc%2B1&state=s1 HTTP/1.1", "Code", "abc+1")]
+    [InlineData("GET /callback?code=abc&state=forged HTTP/1.1", "StateMismatch", null)]
+    [InlineData("GET /callback?code=abc HTTP/1.1", "StateMismatch", null)]
+    [InlineData("GET /callback?error=access_denied&error_description=User+denied&state=s1 HTTP/1.1", "Error", "User denied")]
+    [InlineData("GET /favicon.ico HTTP/1.1", "NotCallback", null)]
+    [InlineData("POST /callback?code=abc&state=s1 HTTP/1.1", "NotCallback", null)]
+    [InlineData(null, "NotCallback", null)]
+    public void ClaudeOAuth_ParseCallbackRequestLine(string? requestLine, string expectedKind, string? expectedValue)
+    {
+        var (kind, value) = ClaudeOAuth.ParseCallbackRequestLine(requestLine, "s1");
+
+        Assert.Equal(expectedKind, kind.ToString());
+        Assert.Equal(expectedValue, value);
+    }
+
+    [Fact]
+    public async Task ClaudeOAuth_ExchangeCodeAsync_PostsAuthorizationCodeAndParsesTokens()
+    {
+        string? body = null;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            body = req.Content!.ReadAsStringAsync().Result;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"access_token":"at","refresh_token":"rt","expires_in":3600,"account":{"email_address":"dev@example.com"}}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+
+        var result = await ClaudeOAuth.ExchangeCodeAsync(client, "the-code", "the-state", "the-verifier", "http://localhost:1234/callback", CancellationToken.None);
+
+        Assert.Equal(ClaudeOAuth.TokenEndpoints[0], handler.ReceivedRequests.Single().RequestUri!.ToString());
+        Assert.Contains("\"grant_type\":\"authorization_code\"", body);
+        Assert.Contains("\"code\":\"the-code\"", body);
+        Assert.Contains("\"state\":\"the-state\"", body);
+        Assert.Contains("\"code_verifier\":\"the-verifier\"", body);
+        Assert.Contains("\"redirect_uri\":\"http://localhost:1234/callback\"", body);
+        Assert.Equal("at", result.Tokens.AccessToken);
+        Assert.Equal("rt", result.Tokens.RefreshToken);
+        Assert.NotNull(result.Tokens.ExpiresAt);
+        Assert.Equal("dev@example.com", result.Email);
+    }
+
+    [Fact]
+    public async Task ClaudeOAuth_ExchangeCodeAsync_RejectsResponseWithoutRefreshToken()
+    {
+        var handler = new MockHttpMessageHandler(req => new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new TrackingContent("""{"access_token":"at"}""")
+        });
+        using var client = new HttpClient(handler);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            ClaudeOAuth.ExchangeCodeAsync(client, "c", "s", "v", "http://localhost:1/callback", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ClaudeOAuth_LoginAsync_CompletesViaLoopbackRedirect()
+    {
+        string? tokenRequestBody = null;
+        var handler = new MockHttpMessageHandler(req =>
+        {
+            tokenRequestBody = req.Content!.ReadAsStringAsync().Result;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new TrackingContent("""{"access_token":"login-at","refresh_token":"login-rt","expires_in":3600,"account":{"email_address":"me@example.com"}}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+        using var browser = new HttpClient();
+        Task<HttpResponseMessage>? forgedResponse = null;
+        Task<HttpResponseMessage>? callbackResponse = null;
+
+        var result = await ClaudeOAuth.LoginAsync(client, authorizeUrl =>
+        {
+            var query = authorizeUrl.Query.TrimStart('?').Split('&')
+                .Select(p => p.Split('=', 2))
+                .ToDictionary(p => p[0], p => Uri.UnescapeDataString(p[1]));
+            var redirect = query["redirect_uri"];
+            // Simulate the browser following the redirect back to PowerQuota; a forged state is ignored first.
+            callbackResponse = Task.Run(async () =>
+            {
+                forgedResponse = browser.GetAsync($"{redirect}?code=evil&state=forged");
+                await forgedResponse;
+                return await browser.GetAsync($"{redirect}?code=real-code&state={Uri.EscapeDataString(query["state"])}");
+            });
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal("login-at", result.Tokens.AccessToken);
+        Assert.Equal("login-rt", result.Tokens.RefreshToken);
+        Assert.Equal("me@example.com", result.Email);
+        Assert.Contains("\"code\":\"real-code\"", tokenRequestBody);
+        Assert.Equal(System.Net.HttpStatusCode.BadRequest, (await forgedResponse!).StatusCode);
+        var callback = await callbackResponse!;
+        Assert.Equal(System.Net.HttpStatusCode.OK, callback.StatusCode);
+        Assert.Contains("signed in", await callback.Content.ReadAsStringAsync());
     }
 
     [Fact]

@@ -48,7 +48,7 @@ public class AddAccountFormPage : ListPage
     private string GetProviderConnectDescription(ProviderId provider) => provider switch
     {
         ProviderId.Codex => "Scan local ~/.codex/auth.json or configure account",
-        ProviderId.Claude => "Scan local ~/.claude/auth.json credentials",
+        ProviderId.Claude => "Sign in with your Claude account in the browser",
         ProviderId.Cursor => "Scan local Cursor IDE database (state.vscdb)",
         ProviderId.Gemini => "Scan Antigravity credentials from Windows Credential Manager",
         ProviderId.Copilot => "Scan local GitHub Copilot credentials",
@@ -59,12 +59,13 @@ public class AddAccountFormPage : ListPage
 
     private void AutoScanOrConnect(ProviderId provider)
     {
+        string? accountId = null;
         _configStorage.Mutate(config =>
         {
             var existing = config.Accounts.FirstOrDefault(a => a.Provider == provider);
             if (existing == null)
             {
-                var newAccount = new AccountConfig
+                existing = new AccountConfig
                 {
                     Provider = provider,
                     Label = $"{provider.GetLabel()} Quota",
@@ -72,9 +73,16 @@ public class AddAccountFormPage : ListPage
                     UpdatedAt = DateTimeOffset.UtcNow
                 };
 
-                config.Accounts.Add(newAccount);
+                config.Accounts.Add(existing);
             }
+            accountId = existing.Id;
         });
+
+        if (provider == ProviderId.Claude && accountId != null)
+        {
+            ClaudeLogin.Start(_refreshService, accountId);
+            return;
+        }
         _ = _refreshService.RefreshProviderAsync(provider);
     }
 }

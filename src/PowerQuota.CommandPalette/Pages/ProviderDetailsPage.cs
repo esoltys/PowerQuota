@@ -101,6 +101,35 @@ public class ProviderDetailsPage : ListPage
 
                     var icon = ProviderIcons.GetIcon(_provider);
 
+                    var moreCommands = new List<IContextItem>
+                    {
+                        new CommandContextItem(new CopyTextCommand($"{pctLabel} • {subtitle}"))
+                        {
+                            Title = "Copy Quota Text"
+                        },
+                        new CommandContextItem(new AnonymousCommand(() =>
+                        {
+                            _ = _refreshService.RefreshProviderAsync(_provider);
+                        }))
+                        {
+                            Title = "Refresh Quota"
+                        }
+                    };
+                    if (_provider == ProviderId.Claude)
+                    {
+                        moreCommands.Add(CreateClaudeLoginItem(acc.AccountId, "Log in Again"));
+                    }
+                    moreCommands.Add(new CommandContextItem(new AnonymousCommand(() =>
+                    {
+                        config.Accounts.RemoveAll(a => a.Id == acc.AccountId);
+                        _configStorage.Save(config);
+                        _vault.RemoveAccount(acc.AccountId);
+                        _refreshService.RemoveAccount(acc.AccountId);
+                    }))
+                    {
+                        Title = "Remove Account"
+                    });
+
                     items.Add(new ListItem(new AnonymousCommand(() =>
                     {
                         _ = _refreshService.RefreshProviderAsync(_provider);
@@ -109,30 +138,7 @@ public class ProviderDetailsPage : ListPage
                         Title = itemTitle,
                         Subtitle = subtitle,
                         Icon = icon,
-                        MoreCommands = new IContextItem[]
-                        {
-                            new CommandContextItem(new CopyTextCommand($"{pctLabel} • {subtitle}"))
-                            {
-                                Title = "Copy Quota Text"
-                            },
-                            new CommandContextItem(new AnonymousCommand(() =>
-                            {
-                                _ = _refreshService.RefreshProviderAsync(_provider);
-                            }))
-                            {
-                                Title = "Refresh Quota"
-                            },
-                            new CommandContextItem(new AnonymousCommand(() =>
-                            {
-                                config.Accounts.RemoveAll(a => a.Id == acc.AccountId);
-                                _configStorage.Save(config);
-                                _vault.RemoveAccount(acc.AccountId);
-                                _refreshService.RemoveAccount(acc.AccountId);
-                            }))
-                            {
-                                Title = "Remove Account"
-                            }
-                        }
+                        MoreCommands = moreCommands.ToArray()
                     });
                 }
 
@@ -164,41 +170,65 @@ public class ProviderDetailsPage : ListPage
             {
                 string guidance = GetLoginGuidance(_provider, acc);
                 string itemTitle = accounts.Count > 1 ? $"{_provider.GetLabel()} Quota ({acc.Label})" : $"{_provider.GetLabel()} Quota";
-                items.Add(new ListItem(new AnonymousCommand(() =>
+                bool isClaude = _provider == ProviderId.Claude;
+                var moreCommands = new List<IContextItem>();
+                if (isClaude)
+                {
+                    moreCommands.Add(CreateClaudeLoginItem(acc.AccountId, "Log in to Claude"));
+                }
+                moreCommands.Add(new CommandContextItem(new AnonymousCommand(() =>
                 {
                     _ = _refreshService.RefreshProviderAsync(_provider);
+                }))
+                {
+                    Title = isClaude ? "Refresh Quota" : "Refresh / Scan"
+                });
+                moreCommands.Add(new CommandContextItem(new AnonymousCommand(() =>
+                {
+                    _configStorage.Mutate(cfg =>
+                    {
+                        cfg.Accounts.RemoveAll(a => a.Id == acc.AccountId);
+                    });
+                    _vault.RemoveAccount(acc.AccountId);
+                    _refreshService.RemoveAccount(acc.AccountId);
+                }))
+                {
+                    Title = "Remove Account"
+                });
+
+                items.Add(new ListItem(new AnonymousCommand(() =>
+                {
+                    // Claude only has a PowerQuota login to recover with; other providers rescan local credentials.
+                    if (isClaude && acc.AuthState == AuthState.ActionRequired && !acc.IsBackingOff)
+                    {
+                        ClaudeLogin.Start(_refreshService, acc.AccountId);
+                    }
+                    else
+                    {
+                        _ = _refreshService.RefreshProviderAsync(_provider);
+                    }
                 }))
                 {
                     Title = itemTitle,
                     Subtitle = guidance,
                     Icon = ProviderIcons.GetIcon(_provider),
-                    MoreCommands = new IContextItem[]
-                    {
-                        new CommandContextItem(new AnonymousCommand(() =>
-                        {
-                            _ = _refreshService.RefreshProviderAsync(_provider);
-                        }))
-                        {
-                            Title = "Refresh / Scan"
-                        },
-                        new CommandContextItem(new AnonymousCommand(() =>
-                        {
-                            _configStorage.Mutate(cfg =>
-                            {
-                                cfg.Accounts.RemoveAll(a => a.Id == acc.AccountId);
-                            });
-                            _vault.RemoveAccount(acc.AccountId);
-                            _refreshService.RemoveAccount(acc.AccountId);
-                        }))
-                        {
-                            Title = "Remove Account"
-                        }
-                    }
+                    MoreCommands = moreCommands.ToArray()
                 });
             }
         }
 
         return items.ToArray();
+    }
+
+    private CommandContextItem CreateClaudeLoginItem(string accountId, string title)
+    {
+        return new CommandContextItem(new AnonymousCommand(() =>
+        {
+            ClaudeLogin.Start(_refreshService, accountId);
+        }))
+        {
+            Title = title
+        };
     }
 
     private static string GetLoginGuidance(ProviderId provider, ProviderAccountRuntimeState acc)
@@ -211,7 +241,7 @@ public class ProviderDetailsPage : ListPage
         string? error = acc.Error;
         return provider switch
         {
-            ProviderId.Claude => $"Claude Code CLI: Run 'claude' in terminal to login ({error ?? "Login required"})",
+            ProviderId.Claude => $"Claude: Select to log in with your browser ({error ?? "Login required"})",
             ProviderId.Codex => $"ChatGPT / Codex CLI: Run 'codex login' in terminal ({error ?? "Login required"})",
             ProviderId.Cursor => $"Cursor IDE: Sign into Cursor to refresh session ({error ?? "Session expired"})",
             ProviderId.Gemini => $"Antigravity: Sign into Antigravity desktop app or CLI ({error ?? "Login required"})",

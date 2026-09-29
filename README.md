@@ -39,7 +39,7 @@ A Windows-native extension for **PowerToys Command Palette** and the **PowerToys
 ## Highlights
 
 - **7 Supported AI Providers**
-  - **Claude Code**: 5h session windows, weekly model quotas (e.g. Claude 3.7 Sonnet, Opus), extra spend limits, and automatic `~/.claude/.credentials.json` discovery.
+  - **Claude Code**: 5h session windows, weekly model quotas (e.g. Claude 3.7 Sonnet, Opus), extra spend limits, and PowerQuota's own browser sign-in (OAuth + PKCE) with automatic token refresh — independent of the Claude Code CLI and Claude Desktop sessions.
   - **Codex / ChatGPT**: 5h session limits, weekly windows, OpenAI credit balance, and `~/.codex/auth.json` host discovery.
   - **Cursor**: Safe read-only SQLite state scanning (`state.vscdb`), Fast/Composer and monthly request limits.
   - **Gemini (Google Code Assist)**: Multi-tier quota classification (Flash, Lite, Pro) with project resolution.
@@ -66,7 +66,7 @@ PowerQuota is designed from the ground up to respect developer privacy and prote
 1. **Zero Telemetry & Zero Analytics**: PowerQuota does not collect, log, or transmit any analytics, telemetry, or user diagnostics.
 2. **Direct-to-Provider Communication**: All API requests for quota metrics are made directly from your computer to the official AI provider endpoints (e.g. `api.anthropic.com`, `chatgpt.com`, `cursor.com`, `github.com`) over encrypted HTTPS/TLS. There are no intermediate cloud servers, proxies, or relays.
 3. **Encrypted Local Storage (Windows DPAPI)**: All stored tokens and credentials are encrypted using the Windows Data Protection API (`System.Security.Cryptography.ProtectedData` with `DataProtectionScope.CurrentUser`). Credentials stored in `$env:LOCALAPPDATA\PowerQuota\vault.dat` are tied to your Windows user account and cannot be read by other users or transferred to another machine.
-4. **Read-Only Local Host Scanning**: When auto-discovering existing CLI/IDE credentials (such as Claude Code `~/.claude/.credentials.json`, Codex `~/.codex/auth.json`, or Cursor SQLite databases), PowerQuota operates strictly in read-only mode and never alters your existing login session files.
+4. **Read-Only Local Host Scanning**: When auto-discovering existing CLI/IDE credentials (such as Codex `~/.codex/auth.json` or Cursor SQLite databases), PowerQuota operates strictly in read-only mode and never alters your existing login session files.
 5. **Open Source & Auditable**: The complete source code is open and verifiable under the MIT license.
 
 ---
