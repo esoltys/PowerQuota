@@ -30,6 +30,57 @@ win-x64, zip, GitHub release). Store packaging (MSIX) is a separate,
 manual flow — see `.agents/rules/store-packaging.md` for the
 environment variables and steps involved.
 
+## Architecture
+
+Three projects under `src/`:
+
+- **PowerQuota.Core** — headless engine, no UI/WinRT dependencies.
+  - `Providers/IProviderAdapter.cs` is the contract every AI provider
+    implements: `FetchAsync(AccountConfig, WindowsCredentialVault,
+    HttpClient, ct)` returns a `UsageSnapshot`, plus
+    `GetSystemActiveAccountIdAsync` for auto-detecting which
+    locally-logged-in account is active. Add a new provider by
+    implementing this interface (see `ClaudeProvider.cs`,
+    `CodexProvider.cs`, etc.) and registering it wherever adapters are
+    enumerated (`Engine/QuotaRefreshService.cs`).
+  - `Engine/QuotaRefreshService.cs` polls all configured provider
+    adapters on a schedule with exponential backoff on rate-limit
+    responses.
+  - `Storage/WindowsCredentialVault.cs` encrypts all stored
+    tokens/credentials via Windows DPAPI (`ProtectedData`,
+    `CurrentUser` scope) at `$env:LOCALAPPDATA\PowerQuota\vault.dat`.
+    Never store credentials in plaintext.
+  - `Storage/HostCliScanner.cs` does read-only auto-discovery of
+    existing CLI credentials (e.g. `~/.claude/.credentials.json`,
+    `~/.codex/auth.json`, Cursor's `state.vscdb`). Must stay strictly
+    read-only — never mutate another tool's session/credential files.
+  - `Storage/ConfigStorage.cs` / `Storage/Config.cs` hold non-secret
+    app configuration. `Models/UsageModels.cs` defines
+    `UsageSnapshot`/`UsageWindow`/`AppState`; `Models/ProviderId.cs`
+    enumerates supported providers.
+
+- **PowerQuota.CommandPalette** — the WinRT COM server extension that
+  plugs into PowerToys Command Palette/Dock (`Program.cs` is the
+  out-of-process COM entrypoint; `Package.appxmanifest` declares the
+  `com.microsoft.commandpalette` AppExtension).
+  `Providers/PowerQuotaCommandProvider.cs` implements
+  `ICommandProvider4` and `GetDockBands` — the integration surface
+  PowerToys calls into. `Pages/` holds the Command Palette UI
+  (`OverviewListPage`, `ProviderDetailsPage`, `AddAccountFormPage`,
+  `SettingsFormPage`). Keep provider-specific parsing/auth logic in
+  Core, not here.
+
+- **PowerQuota.Core.Tests** — xUnit tests for providers, storage, and
+  the refresh engine.
+
+## Privacy invariant
+
+Zero telemetry, no third-party network calls — every request goes
+directly from the user's machine to the official provider API
+(`api.anthropic.com`, `chatgpt.com`, `cursor.com`, `github.com`, etc.).
+Don't introduce any analytics/telemetry dependency or route data
+through an intermediate server.
+
 ## Issue priority & status
 
 Priority and Status are tracked as fields on the GitHub Project, not as labels or
