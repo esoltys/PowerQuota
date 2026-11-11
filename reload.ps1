@@ -26,7 +26,7 @@ if ($Register) {
     Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
     Get-AppxPackage *PowerQuota* | Remove-AppxPackage -ErrorAction SilentlyContinue
     Stop-Process -Name "PowerQuota.CommandPalette" -Force -ErrorAction SilentlyContinue
-    $manifestPath = "$PSScriptRoot\src\PowerQuota.CommandPalette\bin\Release\net10.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
+    $manifestPath = "$PSScriptRoot\src\PowerQuota.CommandPalette\bin\Release\net11.0-windows10.0.26100.0\win-x64\publish\AppxManifest.xml"
     Add-AppxPackage -Register $manifestPath
 
     # Clean up any orphaned/stale PowerQuota dock bands from Command Palette settings.json
